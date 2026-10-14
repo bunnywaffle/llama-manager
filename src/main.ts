@@ -470,6 +470,11 @@ function collectConfigFromUI(overrideModelPath?: string): ServerConfig {
     draftMaxTokens: Number($<HTMLInputElement>("#cfg-draft-tokens")?.value || 4),
     draftGpuLayers: Number($<HTMLInputElement>("#cfg-draft-layers")?.value || 99),
     draftSpecType: $<HTMLSelectElement>("#cfg-draft-type")?.value || "none",
+
+    // Reasoning & Thinking Settings
+    reasoningFormat: $<HTMLSelectElement>("#cfg-reasoning-format")?.value || "deepseek-legacy",
+    reasoningEffort: $<HTMLSelectElement>("#cfg-reasoning-effort")?.value || "default",
+    enableJinja: $<HTMLInputElement>("#cfg-enable-jinja")?.checked ?? true,
   };
 }
 
@@ -572,6 +577,16 @@ async function loadConfig() {
 
     const draftType = document.querySelector<HTMLSelectElement>("#cfg-draft-type");
     if (draftType) draftType.value = cfg.draftSpecType || "none";
+
+    // Reasoning & Thinking Settings
+    const rFormat = document.querySelector<HTMLSelectElement>("#cfg-reasoning-format");
+    if (rFormat) rFormat.value = cfg.reasoningFormat || "deepseek-legacy";
+
+    const rEffort = document.querySelector<HTMLSelectElement>("#cfg-reasoning-effort");
+    if (rEffort) rEffort.value = cfg.reasoningEffort || "default";
+
+    const rJinja = document.querySelector<HTMLInputElement>("#cfg-enable-jinja");
+    if (rJinja) rJinja.checked = cfg.enableJinja ?? true;
 
     updateLinkedModelsBadge();
   } catch (err) {
@@ -1455,6 +1470,7 @@ function setupChat() {
   const container = $("#chat-messages");
   const threadsContainer = $("#chat-threads-list");
   const personaSelect = $<HTMLSelectElement>("#chat-persona-select");
+  const reasoningSelect = $<HTMLSelectElement>("#chat-reasoning-select");
   const sessionTitle = $("#chat-session-title");
   const btnNewThread = $("#btn-new-thread");
   const btnClearChat = $("#btn-clear-chat");
@@ -1512,6 +1528,11 @@ function setupChat() {
 
   personaSelect.addEventListener("change", () => {
     currentSession.personaId = personaSelect.value;
+    saveSession(currentSession);
+  });
+
+  reasoningSelect?.addEventListener("change", () => {
+    currentSession.reasoningEffort = reasoningSelect.value;
     saveSession(currentSession);
   });
 
@@ -1634,7 +1655,7 @@ function setupChat() {
 
   // Create new thread
   btnNewThread.addEventListener("click", () => {
-    currentSession = createNewSession(personaSelect.value || "default");
+    currentSession = createNewSession(personaSelect.value || "default", reasoningSelect ? reasoningSelect.value : "default");
     currentSessionId = currentSession.id;
     renderSessions();
     renderPersonaOptions();
@@ -1681,6 +1702,9 @@ function setupChat() {
   // Render stage (chat history tree path)
   function renderStage() {
     sessionTitle.textContent = currentSession.title || "Chat Playground";
+    if (reasoningSelect) {
+      reasoningSelect.value = currentSession.reasoningEffort || "default";
+    }
     container.innerHTML = "";
 
     const path = getActiveConversationPath(currentSession);
@@ -1982,10 +2006,11 @@ function setupChat() {
       const routerSelect = document.querySelector<HTMLSelectElement>("#chat-router-model-select");
       const routerCheck = document.querySelector<HTMLInputElement>("#cfg-router-mode");
       const modelArg = routerCheck && routerCheck.checked && routerSelect && routerSelect.value ? routerSelect.value : "";
+      const reasoningEffort = reasoningSelect ? reasoningSelect.value : (currentSession.reasoningEffort || "default");
 
       const reply = modelArg
-        ? await LlamaService.sendChatWithModel(modelArg, messagesToSend, tempVal)
-        : await LlamaService.sendChat(messagesToSend, tempVal);
+        ? await LlamaService.sendChatWithModel(modelArg, messagesToSend, tempVal, reasoningEffort)
+        : await LlamaService.sendChat(messagesToSend, tempVal, reasoningEffort);
 
       targetNode.content = reply;
       saveSession(currentSession);

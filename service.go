@@ -501,14 +501,14 @@ func (s *LlamaService) GetRecentLogs() []string {
 	return s.serverMgr.GetRecentLogs()
 }
 
-// SendChat proxies a chat message list to the running server.
-func (s *LlamaService) SendChat(messages []ChatMessage, temperature float64) (string, error) {
-	return s.serverMgr.SendChatMessage(messages, temperature)
+// SendChat proxies a chat message list to the running server with an optional reasoning effort.
+func (s *LlamaService) SendChat(messages []ChatMessage, temperature float64, reasoningEffort string) (string, error) {
+	return s.serverMgr.SendChatMessage(messages, temperature, reasoningEffort)
 }
 
-// SendChatWithModel proxies chat messages to llama-server with an optional model name (for Router Mode).
-func (s *LlamaService) SendChatWithModel(model string, messages []ChatMessage, temperature float64) (string, error) {
-	return s.serverMgr.SendChatMessageWithModel(model, messages, temperature)
+// SendChatWithModel proxies chat messages to llama-server with an optional model name (for Router Mode) and reasoning effort.
+func (s *LlamaService) SendChatWithModel(model string, messages []ChatMessage, temperature float64, reasoningEffort string) (string, error) {
+	return s.serverMgr.SendChatMessageWithModel(model, messages, temperature, reasoningEffort)
 }
 
 // RunDiagnostics performs a comprehensive health scan of the backend and environment.

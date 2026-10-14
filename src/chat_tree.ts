@@ -11,6 +11,7 @@ export interface ChatSession {
   id: string;
   title: string;
   personaId: string;
+  reasoningEffort?: string;
   rootNodeId: string | null;
   activeNodeId: string | null;
   nodes: Record<string, ChatNode>;
@@ -125,12 +126,13 @@ export function setActiveSessionId(id: string): void {
   localStorage.setItem(STORAGE_KEY_ACTIVE, id);
 }
 
-export function createNewSession(personaId = "default"): ChatSession {
+export function createNewSession(personaId = "default", reasoningEffort = "default"): ChatSession {
   const id = "sess_" + Date.now() + "_" + Math.random().toString(36).slice(2, 7);
   const session: ChatSession = {
     id,
     title: "New Conversation",
     personaId,
+    reasoningEffort,
     rootNodeId: null,
     activeNodeId: null,
     nodes: {},

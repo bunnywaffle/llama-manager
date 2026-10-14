@@ -667,6 +667,37 @@
                       </div>
                     </div>
                   </div>
+
+                  <!-- Section 5: Reasoning & Thinking Support -->
+                  <div>
+                    <div class="adv-section-title">Reasoning & Thinking Models (DeepSeek-R1, QwQ, etc.)</div>
+                    <div class="adv-grid">
+                      <div class="form-field" style="margin-bottom: 0;">
+                        <label class="form-label">Reasoning Format (--reasoning-format)</label>
+                        <select class="form-select" id="cfg-reasoning-format">
+                          <option value="deepseek-legacy" selected>DeepSeek Legacy (&lt;think&gt; in content)</option>
+                          <option value="deepseek">DeepSeek (reasoning_content field)</option>
+                          <option value="none">None (Disabled)</option>
+                        </select>
+                      </div>
+                      <div class="form-field" style="margin-bottom: 0;">
+                        <label class="form-label">Default Effort (--reasoning-effort)</label>
+                        <select class="form-select" id="cfg-reasoning-effort">
+                          <option value="default" selected>Default / Auto</option>
+                          <option value="low">Low</option>
+                          <option value="medium">Medium</option>
+                          <option value="high">High</option>
+                          <option value="max">Max</option>
+                        </select>
+                      </div>
+                      <div class="form-field checkbox-field" style="margin-bottom: 0; align-self: flex-end;">
+                        <label class="checkbox-label" for="cfg-enable-jinja">
+                          <input type="checkbox" id="cfg-enable-jinja" checked />
+                          <span>Jinja Template Engine (--jinja)</span>
+                        </label>
+                      </div>
+                    </div>
+                  </div>
                 </div>
               </details>
 
@@ -739,6 +770,19 @@
                       <span class="ctrl-label">Model:</span>
                       <select class="persona-select" id="chat-router-model-select">
                         <!-- Rendered dynamically when Router Mode is on -->
+                      </select>
+                    </div>
+
+                    <!-- Reasoning Effort Selector -->
+                    <div class="persona-select-wrap" id="chat-reasoning-wrap" title="Reasoning effort level for DeepSeek-R1, QwQ, etc.">
+                      <span class="ctrl-label"><i data-lucide="brain" style="width: 13px; height: 13px; vertical-align: middle;"></i> Reasoning:</span>
+                      <select class="persona-select" id="chat-reasoning-select">
+                        <option value="default">Auto / Default</option>
+                        <option value="low">Low</option>
+                        <option value="medium">Medium</option>
+                        <option value="high">High</option>
+                        <option value="max">Max</option>
+                        <option value="off">Off (Disable)</option>
                       </select>
                     </div>
 

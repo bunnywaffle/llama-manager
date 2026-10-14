@@ -75,6 +75,11 @@ type ServerConfig struct {
 	DraftMaxTokens int    `json:"draftMaxTokens"`
 	DraftGPULayers int    `json:"draftGpuLayers"`
 	DraftSpecType  string `json:"draftSpecType"`
+
+	// Reasoning & Thinking Settings (DeepSeek-R1, QwQ, etc.)
+	ReasoningFormat string `json:"reasoningFormat"`
+	ReasoningEffort string `json:"reasoningEffort"`
+	EnableJinja     bool   `json:"enableJinja"`
 }
 
 
@@ -134,6 +139,9 @@ func NewServerManager(binDir string) *ServerManager {
 			ContBatching:     true,
 			RoPEScaling:      "none",
 			SplitMode:        "none",
+			ReasoningFormat:  "deepseek-legacy",
+			ReasoningEffort:  "default",
+			EnableJinja:      true,
 		},
 	}
 }
@@ -345,6 +353,17 @@ func (sm *ServerManager) Start(cfg ServerConfig) error {
 		args = append(args, extraParts...)
 	}
 
+	// Reasoning & Thinking model arguments (DeepSeek-R1, QwQ, etc.)
+	if cfg.EnableJinja {
+		args = append(args, "--jinja")
+	}
+	if cfg.ReasoningFormat != "" && cfg.ReasoningFormat != "none" {
+		args = append(args, "--reasoning-format", cfg.ReasoningFormat)
+	}
+	if cfg.ReasoningEffort != "" && cfg.ReasoningEffort != "default" && cfg.ReasoningEffort != "auto" {
+		args = append(args, "--reasoning-effort", cfg.ReasoningEffort)
+	}
+
 	cmd := prepareCmd(exec.Command(serverExe, args...))
 	cmd.Dir = sm.binDir
 
@@ -552,17 +571,18 @@ type ChatMessage struct {
 	Content string `json:"content"`
 }
 
-// SendChatMessage proxies chat request to running llama-server.
-func (sm *ServerManager) SendChatMessage(messages []ChatMessage, temperature float64) (string, error) {
-	return sm.SendChatMessageWithModel("", messages, temperature)
+// SendChatMessage proxies chat request to running llama-server with an optional reasoning effort.
+func (sm *ServerManager) SendChatMessage(messages []ChatMessage, temperature float64, reasoningEffort string) (string, error) {
+	return sm.SendChatMessageWithModel("", messages, temperature, reasoningEffort)
 }
 
-// SendChatMessageWithModel proxies chat request to running llama-server with an optional model name.
-func (sm *ServerManager) SendChatMessageWithModel(model string, messages []ChatMessage, temperature float64) (string, error) {
+// SendChatMessageWithModel proxies chat request to running llama-server with an optional model name and reasoning effort.
+func (sm *ServerManager) SendChatMessageWithModel(model string, messages []ChatMessage, temperature float64, reasoningEffort string) (string, error) {
 	sm.mu.Lock()
 	host := sm.cfg.Host
 	port := sm.cfg.Port
 	running := sm.running
+	defaultEffort := sm.cfg.ReasoningEffort
 	sm.mu.Unlock()
 
 	if !running {
@@ -576,6 +596,20 @@ func (sm *ServerManager) SendChatMessageWithModel(model string, messages []ChatM
 	}
 	if model != "" {
 		reqBody["model"] = model
+	}
+
+	effort := strings.TrimSpace(reasoningEffort)
+	if effort == "" {
+		effort = strings.TrimSpace(defaultEffort)
+	}
+
+	if effort != "" && effort != "default" && effort != "auto" {
+		if effort == "off" || effort == "none" {
+			reqBody["chat_template_kwargs"] = map[string]interface{}{"enable_thinking": false}
+		} else {
+			reqBody["reasoning_effort"] = effort
+			reqBody["chat_template_kwargs"] = map[string]interface{}{"reasoning_effort": effort}
+		}
 	}
 
 	jsonData, err := json.Marshal(reqBody)

@@ -177,6 +177,10 @@ export interface ServerConfig {
   draftMaxTokens: number;
   draftGpuLayers: number;
   draftSpecType: string;
+  /** Reasoning & Thinking Parameters */
+  reasoningFormat: string;
+  reasoningEffort: string;
+  enableJinja: boolean;
 }
 
 /** ServerStatus describes the runtime state of the backend. */
@@ -303,13 +307,13 @@ export const LlamaService = {
   selectFolderDialog(title: string): Promise<string> {
     return call("LlamaService.SelectFolderDialog", title);
   },
-  /** SendChat proxies a chat message list to the running server. */
-  sendChat(messages: ChatMessage[], temperature: number): Promise<string> {
-    return call("LlamaService.SendChat", messages, temperature);
+  /** SendChat proxies a chat message list to the running server with an optional reasoning effort. */
+  sendChat(messages: ChatMessage[], temperature: number, reasoningEffort?: string): Promise<string> {
+    return call("LlamaService.SendChat", messages, temperature, reasoningEffort || "");
   },
-  /** SendChatWithModel proxies chat messages to llama-server with an optional model name (for Router Mode). */
-  sendChatWithModel(model: string, messages: ChatMessage[], temperature: number): Promise<string> {
-    return call("LlamaService.SendChatWithModel", model, messages, temperature);
+  /** SendChatWithModel proxies chat messages to llama-server with an optional model name (for Router Mode) and reasoning effort. */
+  sendChatWithModel(model: string, messages: ChatMessage[], temperature: number, reasoningEffort?: string): Promise<string> {
+    return call("LlamaService.SendChatWithModel", model, messages, temperature, reasoningEffort || "");
   },
   /** SetActiveBackend switches the current active backend to an installed variant. */
   setActiveBackend(variant: string): Promise<void> {
