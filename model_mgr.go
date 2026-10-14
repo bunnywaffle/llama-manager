@@ -197,6 +197,11 @@ func (mm *ModelManager) DeleteModel(identifier string) error {
 		return nil
 	}
 
+	// Try removing direct path first if it exists
+	if _, err := os.Stat(cleanIdent); err == nil && !strings.EqualFold(filepath.Dir(cleanIdent), mm.modelsDir) {
+		return os.Remove(cleanIdent)
+	}
+
 	// Otherwise, delete from modelsDir
 	target := filepath.Join(mm.modelsDir, baseIdent)
 	return os.Remove(target)

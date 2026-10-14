@@ -362,29 +362,27 @@ func (sm *ServerManager) Start(cfg ServerConfig) error {
 		sm.running = false
 		if waitErr != nil {
 			sm.lastError = fmt.Sprintf("Process exited: %v", waitErr)
-			sm.mu.Unlock()
-			sm.addLog(fmt.Sprintf("[System] llama-server process (PID %d) exited: %v", cmd.Process.Pid, waitErr))
+			sm.addLogLocked(fmt.Sprintf("[System] llama-server process (PID %d) exited: %v", cmd.Process.Pid, waitErr))
 		} else {
 			sm.lastError = ""
-			sm.mu.Unlock()
-			sm.addLog(fmt.Sprintf("[System] llama-server process (PID %d) stopped cleanly", cmd.Process.Pid))
+			sm.addLogLocked(fmt.Sprintf("[System] llama-server process (PID %d) stopped cleanly", cmd.Process.Pid))
 		}
+
+		cb := sm.statusCallback
+		st := sm.getStatusLocked()
+		sm.mu.Unlock()
 
 		select {
 		case exitChan <- waitErr:
 		default:
 		}
 
-		sm.mu.Lock()
-		cb := sm.statusCallback
-		st := sm.getStatusLocked()
-		sm.mu.Unlock()
 		if cb != nil {
 			cb(st)
 		}
 	}()
 
-	sm.addLog(fmt.Sprintf("[System] Started llama-server with model %s on %s:%d", filepath.Base(cfg.ModelPath), cfg.Host, cfg.Port))
+	sm.addLogLocked(fmt.Sprintf("[System] Started llama-server with model %s on %s:%d", filepath.Base(cfg.ModelPath), cfg.Host, cfg.Port))
 
 	// Release mutex temporarily while awaiting initial health confirmation
 	sm.mu.Unlock()
@@ -423,7 +421,7 @@ func (sm *ServerManager) Stop() error {
 
 	sm.running = false
 	sm.lastError = ""
-	sm.addLog(fmt.Sprintf("[System] Sent stop signal to llama-server (PID %d)", pid))
+	sm.addLogLocked(fmt.Sprintf("[System] Sent stop signal to llama-server (PID %d)", pid))
 
 	cb := sm.statusCallback
 	st := sm.getStatusLocked()
@@ -499,18 +497,21 @@ func (sm *ServerManager) streamLogs(reader io.Reader) {
 	}
 }
 
-func (sm *ServerManager) addLog(line string) {
-	sm.mu.Lock()
+func (sm *ServerManager) addLogLocked(line string) {
 	if len(sm.logBuffer) >= sm.maxLogs {
 		sm.logBuffer = sm.logBuffer[1:]
 	}
 	sm.logBuffer = append(sm.logBuffer, line)
 	cb := sm.logCallback
-	sm.mu.Unlock()
-
 	if cb != nil {
-		cb(line)
+		go cb(line)
 	}
+}
+
+func (sm *ServerManager) addLog(line string) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	sm.addLogLocked(line)
 }
 
 // ChatMessage represents a message in OpenAI compatible chat format.

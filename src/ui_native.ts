@@ -84,7 +84,7 @@ export function showConfirm(
 ): Promise<boolean> {
   return new Promise((resolve) => {
     const overlay = document.createElement('div');
-    overlay.className = 'modal-backdrop open';
+    overlay.className = 'modal-backdrop modal-overlay open';
     overlay.style.zIndex = '100002';
 
     const dialog = document.createElement('div');
@@ -108,6 +108,7 @@ export function showConfirm(
     document.body.appendChild(overlay);
 
     const cleanup = (result: boolean) => {
+      window.removeEventListener('keydown', keyListener);
       overlay.classList.remove('open');
       setTimeout(() => {
         if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
@@ -115,19 +116,28 @@ export function showConfirm(
       resolve(result);
     };
 
-    overlay.querySelector('#btn-modal-cancel')?.addEventListener('click', () => cleanup(false));
-    overlay.querySelector('#btn-modal-confirm')?.addEventListener('click', () => cleanup(true));
+    overlay.querySelector('#btn-modal-cancel')?.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      cleanup(false);
+    });
+    overlay.querySelector('#btn-modal-confirm')?.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      cleanup(true);
+    });
 
     const keyListener = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
-        window.removeEventListener('keydown', keyListener);
         cleanup(false);
       } else if (e.key === 'Enter') {
-        window.removeEventListener('keydown', keyListener);
         cleanup(true);
       }
     };
     window.addEventListener('keydown', keyListener);
+
+    const confirmBtn = overlay.querySelector<HTMLButtonElement>('#btn-modal-confirm');
+    confirmBtn?.focus();
   });
 }
 

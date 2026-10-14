@@ -276,6 +276,10 @@ async function loadModels() {
         <td style="color: var(--text-low); font-size: 11.5px;">${m.modifiedAt}</td>
         <td style="text-align: right;">
           <div style="display: inline-flex; gap: 6px;">
+            <button class="btn btn-primary btn-sm btn-run-model" data-path="${m.path}" title="Load and start server with this model">
+              <i data-lucide="play"></i>
+              <span>Run</span>
+            </button>
             <button class="btn btn-secondary btn-sm btn-sel-model" data-path="${m.path}">Select</button>
             <button class="btn btn-danger btn-sm btn-del-model" data-name="${m.name}" data-path="${m.path}" data-external="${m.isExternal ? "true" : "false"}">
               ${m.isExternal ? "Unlink" : "Delete"}
@@ -284,6 +288,18 @@ async function loadModels() {
         </td>
       `;
       tbody.appendChild(tr);
+    });
+
+    $$(".btn-run-model").forEach((b) => {
+      b.addEventListener("click", async () => {
+        const p = b.getAttribute("data-path");
+        if (p) {
+          quickSelect.value = p;
+          const nav = document.querySelector<HTMLElement>('[data-tab="dashboard"]');
+          nav?.click();
+          await startServerHandler();
+        }
+      });
     });
 
     $$(".btn-sel-model").forEach((b) => {
@@ -340,6 +356,11 @@ async function loadModels() {
         const isExternal = b.getAttribute("data-external") === "true";
         if (!name) return;
 
+        if (isServerRunning) {
+          showToast("Please stop the running server before deleting or unlinking models.", "warning", "Server Running");
+          return;
+        }
+
         const title = isExternal ? "Unlink Model" : "Delete Local Model";
         const msg = isExternal
           ? `Remove "${name}" from llama.cpp Manager? (Your original file on disk will NOT be deleted).`
@@ -347,12 +368,18 @@ async function loadModels() {
 
         const confirmed = await showConfirm(title, msg, isExternal ? "Unlink Model" : "Delete Model", true);
         if (confirmed) {
-          await LlamaService.deleteModel(path || name);
-          showToast(isExternal ? `Unlinked model ${name}` : `Deleted model ${name}`, "info");
-          loadModels();
+          try {
+            await LlamaService.deleteModel(path || name);
+            showToast(isExternal ? `Unlinked model ${name}` : `Deleted model ${name}`, "info");
+            await loadModels();
+          } catch (err: any) {
+            showToast(`Delete failed: ${err.message || err}`, "error", "Delete Failed");
+          }
         }
       });
     });
+
+    renderIcons();
   } catch (err) {
     console.error("Load models error:", err);
   }
@@ -596,6 +623,59 @@ function setupEvents() {
   });
 }
 
+  // Start Server
+async function startServerHandler() {
+  const dashStart = document.querySelector<HTMLButtonElement>("#btn-dash-start");
+  const quickBtn = document.querySelector<HTMLButtonElement>("#btn-quick-toggle");
+
+  // 1. Verify backend installation
+  try {
+    const backendStatus = await LlamaService.getInstalledBackend();
+    if (!backendStatus.installed) {
+      showToast("Backend executable not found. Please install a backend variant in Overview or Settings first.", "warning", "Backend Missing");
+      return;
+    }
+  } catch {
+    // Continue to attempt start
+  }
+
+  // 2. Verify model selection or Router Mode
+  const routerCheck = $<HTMLInputElement>("#cfg-router-mode");
+  const routerEnabled = routerCheck ? routerCheck.checked : false;
+
+  const quickSelect = $<HTMLSelectElement>("#quick-model-select");
+  const modelPath = quickSelect.value;
+  if (!routerEnabled && !modelPath) {
+    showToast("No model selected. Import, download, or select a .gguf model in models/ first, or enable Router Mode in Configuration.", "warning", "Model Required");
+    return;
+  }
+
+  const cfg = collectConfigFromUI(modelPath);
+
+  if (dashStart) dashStart.disabled = true;
+  if (quickBtn) quickBtn.disabled = true;
+
+  try {
+    await LlamaService.startServer(cfg);
+    showToast(routerEnabled ? "llama-server started in Router Mode" : `llama-server started with model ${modelPath.split(/[/\\]/).pop()}`, "success", "Server Running");
+  } catch (err: any) {
+    showToast(`Launch error: ${err.message || err}`, "error", "Start Failed", 8000);
+    loadLogs();
+  } finally {
+    if (dashStart) dashStart.disabled = false;
+    if (quickBtn) quickBtn.disabled = false;
+  }
+}
+
+async function stopServerHandler() {
+  try {
+    await LlamaService.stopServer();
+    showToast("llama-server process stopped.", "info", "Server Stopped");
+  } catch (err: any) {
+    showToast(`Stop error: ${err.message || err}`, "error", "Stop Failed");
+  }
+}
+
 function setupActions() {
   // GGUF File Import
   const handleImport = async () => {
@@ -615,60 +695,16 @@ function setupActions() {
   $("#btn-import-gguf-dash")?.addEventListener("click", handleImport);
   $("#btn-import-gguf-models")?.addEventListener("click", handleImport);
 
-  // Start Server
-  const startHandler = async () => {
-    // 1. Verify backend installation
-    try {
-      const backendStatus = await LlamaService.getInstalledBackend();
-      if (!backendStatus.installed) {
-        showToast("Backend executable not found. Please install a backend variant in Overview first.", "warning", "Backend Missing");
-        return;
-      }
-    } catch {
-      // Continue to attempt start
-    }
-
-    // 2. Verify model selection or Router Mode
-    const routerCheck = $<HTMLInputElement>("#cfg-router-mode");
-    const routerEnabled = routerCheck ? routerCheck.checked : false;
-
-    const quickSelect = $<HTMLSelectElement>("#quick-model-select");
-    const modelPath = quickSelect.value;
-    if (!routerEnabled && !modelPath) {
-      showToast("No model selected. Import, download, or select a .gguf model in models/ first, or enable Router Mode in Configuration.", "warning", "Model Required");
-      return;
-    }
-
-    const cfg = collectConfigFromUI(modelPath);
-
-    try {
-      await LlamaService.startServer(cfg);
-      showToast(routerEnabled ? "llama-server started in Router Mode" : `llama-server started with model ${modelPath.split(/[/\\]/).pop()}`, "success", "Server Running");
-    } catch (err: any) {
-      showToast(`Launch error: ${err.message || err}`, "error", "Start Failed", 8000);
-      loadLogs();
-    }
-  };
-
-  const stopHandler = async () => {
-    try {
-      await LlamaService.stopServer();
-      showToast("llama-server process stopped.", "info", "Server Stopped");
-    } catch (err: any) {
-      showToast(`Stop error: ${err.message || err}`, "error", "Stop Failed");
-    }
-  };
-
-  $("#btn-dash-start").addEventListener("click", startHandler);
-  $("#btn-dash-stop").addEventListener("click", stopHandler);
-  $("#btn-quick-toggle").addEventListener("click", () => {
-    if (isServerRunning) stopHandler();
-    else startHandler();
+  $("#btn-dash-start")?.addEventListener("click", startServerHandler);
+  $("#btn-dash-stop")?.addEventListener("click", stopServerHandler);
+  $("#btn-quick-toggle")?.addEventListener("click", () => {
+    if (isServerRunning) stopServerHandler();
+    else startServerHandler();
   });
 
-  $("#btn-dash-restart").addEventListener("click", async () => {
-    if (isServerRunning) await stopHandler();
-    setTimeout(startHandler, 800);
+  $("#btn-dash-restart")?.addEventListener("click", async () => {
+    if (isServerRunning) await stopServerHandler();
+    setTimeout(startServerHandler, 800);
   });
 
   $("#btn-refresh-models").addEventListener("click", loadModels);

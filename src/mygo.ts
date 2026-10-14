@@ -24,7 +24,9 @@ export interface BackendStatus {
   latestVersion: string;
 }
 
+/** BackendVariantInfo details each supported backend variant and whether it is installed/active. */
 export interface BackendVariantInfo {
+  /** "cuda", "vulkan", "cpu", "metal", "rocm" */
   variant: string;
   name: string;
   version: string;
@@ -230,6 +232,10 @@ export const LlamaService = {
   getInstalledBackend(): Promise<BackendStatus> {
     return call("LlamaService.GetInstalledBackend");
   },
+  /** GetInstalledBackends returns all available backend variants and their installation/active status. */
+  getInstalledBackends(): Promise<BackendVariantInfo[]> {
+    return call("LlamaService.GetInstalledBackends");
+  },
   /** GetModelsDir returns the current models directory path. */
   getModelsDir(): Promise<string> {
     return call("LlamaService.GetModelsDir");
@@ -294,6 +300,10 @@ export const LlamaService = {
   sendChatWithModel(model: string, messages: ChatMessage[], temperature: number): Promise<string> {
     return call("LlamaService.SendChatWithModel", model, messages, temperature);
   },
+  /** SetActiveBackend switches the current active backend to an installed variant. */
+  setActiveBackend(variant: string): Promise<void> {
+    return call("LlamaService.SetActiveBackend", variant);
+  },
   /** SetAppDataDir updates the working app data directory and persists in settings. */
   setAppDataDir(dir: string): Promise<void> {
     return call("LlamaService.SetAppDataDir", dir);
@@ -317,21 +327,13 @@ export const LlamaService = {
   switchBackend(variant: string): Promise<void> {
     return call("LlamaService.SwitchBackend", variant);
   },
-  /** GetInstalledBackends returns all available backend variants and their installation/active status. */
-  getInstalledBackends(): Promise<BackendVariantInfo[]> {
-    return call("LlamaService.GetInstalledBackends");
-  },
-  /** SetActiveBackend switches the current active backend to an installed variant. */
-  setActiveBackend(variant: string): Promise<void> {
-    return call("LlamaService.SetActiveBackend", variant);
+  /** UninstallAllBackends completely deletes all installed backends and clears the bin folder. */
+  uninstallAllBackends(): Promise<void> {
+    return call("LlamaService.UninstallAllBackends");
   },
   /** UninstallBackend uninstalls a specific backend variant and cleans up binaries. */
   uninstallBackend(variant: string): Promise<void> {
     return call("LlamaService.UninstallBackend", variant);
-  },
-  /** UninstallAllBackends completely deletes all installed backends and clears the bin folder. */
-  uninstallAllBackends(): Promise<void> {
-    return call("LlamaService.UninstallAllBackends");
   },
 } as const;
 
