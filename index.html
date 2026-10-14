@@ -24,11 +24,11 @@
             <span>Overview</span>
           </li>
           <li class="nav-link" data-tab="models">
-            <i data-lucide="box"></i>
+            <i data-lucide="layers"></i>
             <span>Models</span>
           </li>
           <li class="nav-link" data-tab="config">
-            <i data-lucide="sliders"></i>
+            <i data-lucide="sliders-horizontal"></i>
             <span>Configuration</span>
           </li>
           <li class="nav-link" data-tab="logs">
@@ -40,7 +40,7 @@
             <span>Playground</span>
           </li>
           <li class="nav-link" data-tab="updates">
-            <i data-lucide="download-cloud"></i>
+            <i data-lucide="boxes"></i>
             <span>Releases</span>
           </li>
           <li class="nav-link" data-tab="settings">
@@ -51,11 +51,11 @@
 
         <div class="sidebar-footer">
           <div class="hw-row">
-            <span class="hw-label"><i data-lucide="layout"></i> Platform</span>
+            <span class="hw-label"><i data-lucide="monitor"></i> Platform</span>
             <span class="hw-value" id="hw-platform-tag">Detecting...</span>
           </div>
           <div class="hw-row">
-            <span class="hw-label"><i data-lucide="hard-drive"></i> GPU</span>
+            <span class="hw-label"><i data-lucide="zap"></i> GPU</span>
             <span class="hw-value" id="hw-gpu-name">Detecting...</span>
           </div>
           <div class="hw-row">
@@ -63,7 +63,7 @@
             <span class="hw-value" id="hw-backend-tag">Auto</span>
           </div>
           <div class="hw-row">
-            <span class="hw-label">VRAM</span>
+            <span class="hw-label"><i data-lucide="gauge"></i> VRAM</span>
             <span class="hw-value" id="hw-vram">--</span>
           </div>
         </div>
@@ -268,7 +268,7 @@
               <div class="form-row">
                 <input type="text" class="form-input" id="dash-test-input" placeholder="e.g. Write a python hello world function..." />
                 <button class="btn btn-secondary" id="btn-dash-test-send">
-                  <i data-lucide="play"></i>
+                  <i data-lucide="send"></i>
                   <span>Send</span>
                 </button>
               </div>
@@ -282,7 +282,7 @@
             <div class="surface-card">
               <div class="surface-header">
                 <div>
-                  <div class="surface-title"><i data-lucide="box"></i> Installed Models</div>
+                  <div class="surface-title"><i data-lucide="layers"></i> Installed Models</div>
                   <div class="surface-desc">Local .gguf files discovered in the models directory.</div>
                 </div>
                 <div style="display: flex; gap: 8px;">
@@ -423,7 +423,7 @@
             <div class="surface-card" style="max-width: 680px;">
               <div class="surface-header">
                 <div>
-                  <div class="surface-title"><i data-lucide="sliders"></i> Server Parameters</div>
+                  <div class="surface-title"><i data-lucide="sliders-horizontal"></i> Server Parameters</div>
                   <div class="surface-desc">Customize runtime flags passed to llama-server.exe.</div>
                 </div>
               </div>
@@ -467,19 +467,37 @@
                 </div>
               </div>
 
+              <!-- Flash Attention Toggle Card -->
               <div class="form-field">
-                <label class="form-label">Flash Attention (-fa)</label>
-                <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; color: var(--text-high);">
-                  <input type="checkbox" id="cfg-flash-attn" checked style="accent-color: var(--text-high);" />
-                  <span>Enable Flash Attention (reduces VRAM consumption and increases speed)</span>
+                <label class="toggle-card" for="cfg-flash-attn">
+                  <div class="toggle-info">
+                    <span class="toggle-title">
+                      <i data-lucide="zap" style="width: 14px; height: 14px; color: var(--status-amber);"></i>
+                      <span>Flash Attention (-fa)</span>
+                    </span>
+                    <span class="toggle-desc">Reduces VRAM consumption and increases prompt processing speed on supported GPUs</span>
+                  </div>
+                  <div class="switch">
+                    <input type="checkbox" id="cfg-flash-attn" checked />
+                    <span class="switch-slider"></span>
+                  </div>
                 </label>
               </div>
 
+              <!-- Router Mode Toggle Card -->
               <div class="form-field">
-                <label class="form-label">Router Mode (Multi-Model Serving)</label>
-                <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; color: var(--text-high);">
-                  <input type="checkbox" id="cfg-router-mode" style="accent-color: var(--text-high);" />
-                  <span>Enable Router Mode (--models-path): Serves all models in your models directory dynamically. Switch models on the fly in Playground and API clients without server reboots.</span>
+                <label class="toggle-card" for="cfg-router-mode">
+                  <div class="toggle-info">
+                    <span class="toggle-title">
+                      <i data-lucide="layers" style="width: 14px; height: 14px; color: var(--text-high);"></i>
+                      <span>Router Mode (--models-path)</span>
+                    </span>
+                    <span class="toggle-desc">Dynamically serves all models in your models directory. Switch models on the fly in Playground and API clients without server reboots.</span>
+                  </div>
+                  <div class="switch">
+                    <input type="checkbox" id="cfg-router-mode" />
+                    <span class="switch-slider"></span>
+                  </div>
                 </label>
               </div>
 
@@ -798,7 +816,7 @@
             <div class="surface-card">
               <div class="surface-header">
                 <div>
-                  <div class="surface-title"><i data-lucide="download-cloud"></i> Official GitHub Releases</div>
+                  <div class="surface-title"><i data-lucide="boxes"></i> Official GitHub Releases</div>
                   <div class="surface-desc">Releases from ggerganov/llama.cpp. Select variant and click install.</div>
                 </div>
                 <button class="btn btn-secondary btn-sm" id="btn-check-releases">
@@ -858,7 +876,7 @@
             <div class="surface-card">
               <div class="surface-header">
                 <div>
-                  <div class="surface-title"><i data-lucide="box"></i> Models Directory & Default Model</div>
+                  <div class="surface-title"><i data-lucide="layers"></i> Models Directory & Default Model</div>
                   <div class="surface-desc">Configure where local GGUF models are stored and scanned on disk.</div>
                 </div>
               </div>

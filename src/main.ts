@@ -32,6 +32,12 @@ import {
   Bot,
   User,
   Sparkles,
+  Monitor,
+  Zap,
+  Gauge,
+  SlidersHorizontal,
+  Boxes,
+  Settings2,
 } from "lucide";
 import {
   LlamaService,
@@ -99,6 +105,12 @@ function renderIcons() {
       Bot,
       User,
       Sparkles,
+      Monitor,
+      Zap,
+      Gauge,
+      SlidersHorizontal,
+      Boxes,
+      Settings2,
     },
   });
 }
