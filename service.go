@@ -96,6 +96,9 @@ func NewLlamaService(appDataDir string) *LlamaService {
 		}
 	})
 
+	// Ensure any zombie server processes from prior unclean shutdowns are purged to free GPU VRAM
+	_ = KillZombieProcesses()
+
 	return svc
 }
 

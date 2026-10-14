@@ -45,6 +45,16 @@ func main() {
 	svc := NewLlamaService(appDataDir)
 	mygo.Bind(svc)
 
+	// Clean up any lingering background servers and processes on app exit
+	mygo.App.OnBeforeQuit(func(e *mygo.QuitEvent) {
+		_ = svc.StopServer()
+		_ = KillZombieProcesses()
+	})
+	mygo.App.OnWindowAllClosed(func() {
+		_ = svc.StopServer()
+		_ = KillZombieProcesses()
+	})
+
 	mygo.App.WhenReady(func() {
 		win := mygo.NewWindow(mygo.WindowOptions{
 			Title:           "llama.cpp Manager",

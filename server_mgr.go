@@ -180,9 +180,24 @@ func (sm *ServerManager) Start(cfg ServerConfig) error {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
+	// If a managed server instance is currently running, stop it cleanly first
 	if sm.running && sm.cmd != nil && sm.cmd.Process != nil {
-		return fmt.Errorf("llama-server is already running (PID %d)", sm.cmd.Process.Pid)
+		pid := sm.cmd.Process.Pid
+		if runtime.GOOS == "windows" {
+			killCmd := prepareCmd(exec.Command("taskkill", "/PID", strconv.Itoa(pid), "/T", "/F"))
+			_ = killCmd.Run()
+		} else {
+			_ = sm.cmd.Process.Signal(os.Interrupt)
+			time.Sleep(100 * time.Millisecond)
+			_ = sm.cmd.Process.Kill()
+		}
+		sm.running = false
 	}
+
+	// Always terminate any lingering / orphaned llama-server processes (zombies from previous runs or crashes)
+	// to prevent GPU VRAM exhaustion (cudaMalloc failed: out of memory) and socket port binding conflicts.
+	_ = KillZombieProcesses()
+	time.Sleep(150 * time.Millisecond)
 
 	serverExe := filepath.Join(sm.binDir, getServerExeName())
 	if _, err := os.Stat(serverExe); err != nil {
@@ -412,7 +427,12 @@ func (sm *ServerManager) Start(cfg ServerConfig) error {
 		sm.mu.Lock()
 		sm.running = false
 		if waitErr != nil {
-			sm.lastError = fmt.Sprintf("Process exited: %v", waitErr)
+			errReason := sm.getLastMeaningfulErrorLocked()
+			if errReason != "" {
+				sm.lastError = fmt.Sprintf("Process exited: %v (%s)", waitErr, errReason)
+			} else {
+				sm.lastError = fmt.Sprintf("Process exited: %v", waitErr)
+			}
 			sm.addLogLocked(fmt.Sprintf("[System] llama-server process (PID %d) exited: %v", cmd.Process.Pid, waitErr))
 		} else {
 			sm.lastError = ""
@@ -441,9 +461,12 @@ func (sm *ServerManager) Start(cfg ServerConfig) error {
 	case err := <-exitChan:
 		sm.mu.Lock()
 		sm.running = false
-		snippet := sm.getLastErrorSnippetLocked()
-		return fmt.Errorf("llama-server failed to start (%v). Logs: %s", err, snippet)
-	case <-time.After(600 * time.Millisecond):
+		snippet := sm.getLastMeaningfulErrorLocked()
+		if snippet == "" {
+			snippet = sm.getLastErrorSnippetLocked()
+		}
+		return fmt.Errorf("llama-server failed to start (%v). %s", err, snippet)
+	case <-time.After(800 * time.Millisecond):
 		sm.mu.Lock()
 	}
 
@@ -455,6 +478,7 @@ func (sm *ServerManager) Stop() error {
 	defer sm.mu.Unlock()
 
 	if !sm.running || sm.cmd == nil || sm.cmd.Process == nil {
+		_ = KillZombieProcesses()
 		return nil
 	}
 
@@ -473,6 +497,9 @@ func (sm *ServerManager) Stop() error {
 	sm.running = false
 	sm.lastError = ""
 	sm.addLogLocked(fmt.Sprintf("[System] Sent stop signal to llama-server (PID %d)", pid))
+
+	// Clean up any lingering zombie child processes
+	_ = KillZombieProcesses()
 
 	cb := sm.statusCallback
 	st := sm.getStatusLocked()
@@ -498,6 +525,44 @@ func (sm *ServerManager) getStatusLocked() ServerStatus {
 	}
 
 	return status
+}
+
+func (sm *ServerManager) getLastMeaningfulErrorLocked() string {
+	if len(sm.logBuffer) == 0 {
+		return ""
+	}
+	// Search backwards for the most informative error line
+	for i := len(sm.logBuffer) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(sm.logBuffer[i])
+		if line == "" || strings.HasPrefix(line, "[System]") {
+			continue
+		}
+		lower := strings.ToLower(line)
+		if strings.Contains(lower, "error") ||
+			strings.Contains(lower, "failed") ||
+			strings.Contains(lower, "cudamalloc") ||
+			strings.Contains(lower, "out of memory") ||
+			strings.Contains(lower, "cannot open") ||
+			strings.Contains(lower, "exception") ||
+			strings.Contains(lower, "invalid") {
+			if len(line) > 140 {
+				line = line[:137] + "..."
+			}
+			return line
+		}
+	}
+
+	// Fallback to the last non-system log line
+	for i := len(sm.logBuffer) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(sm.logBuffer[i])
+		if line != "" && !strings.HasPrefix(line, "[System]") {
+			if len(line) > 140 {
+				line = line[:137] + "..."
+			}
+			return line
+		}
+	}
+	return ""
 }
 
 func (sm *ServerManager) getLastErrorSnippetLocked() string {
