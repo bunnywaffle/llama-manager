@@ -131,7 +131,17 @@
               <div class="metric-box">
                 <div class="metric-meta">GPU Acceleration</div>
                 <div class="metric-data" id="dash-gpu-layers">99 Layers</div>
-                <div class="metric-sub" id="dash-backend-val">CUDA 12.4 (NVIDIA)</div>
+                <div class="metric-sub" id="dash-backend-val">CUDA (NVIDIA)</div>
+                <div style="display: flex; gap: 6px; margin-top: 6px;">
+                  <button class="btn btn-secondary btn-sm" id="btn-dash-manage-backend" style="padding: 2px 8px; font-size: 11px;">
+                    <i data-lucide="cpu"></i>
+                    <span>Manage</span>
+                  </button>
+                  <button class="btn btn-danger btn-sm" id="btn-dash-uninstall-backend" style="padding: 2px 8px; font-size: 11px;" title="Uninstall active backend">
+                    <i data-lucide="trash-2"></i>
+                    <span>Uninstall</span>
+                  </button>
+                </div>
               </div>
             </div>
 
@@ -744,83 +754,25 @@
             <div class="surface-card">
               <div class="surface-header">
                 <div>
-                  <div class="surface-title"><i data-lucide="cpu"></i> Compute Backend & Hardware Acceleration</div>
-                  <div class="surface-desc">Switch the execution backend variant for llama-server.exe.</div>
+                  <div class="surface-title"><i data-lucide="cpu"></i> Compute Backends & Hardware Acceleration</div>
+                  <div class="surface-desc">Manage installed llama.cpp execution runtimes, switch active accelerator, or uninstall backends.</div>
                 </div>
                 <div style="display: flex; gap: 8px; align-items: center;">
                   <button class="btn btn-secondary btn-sm btn-open-troubleshoot">
                     <i data-lucide="wrench"></i>
                     <span>Troubleshoot</span>
                   </button>
+                  <button class="btn btn-danger btn-sm" id="btn-uninstall-all-backends" title="Wipe all installed backends and clean bin folder">
+                    <i data-lucide="trash-2"></i>
+                    <span>Uninstall All</span>
+                  </button>
                   <span class="tag-badge accent" id="settings-current-backend-tag">CUDA</span>
                 </div>
               </div>
 
-              <div class="backend-card-grid">
-                <label class="backend-radio-card" id="card-backend-metal">
-                  <input type="radio" name="opt-backend" value="metal" id="radio-backend-metal" />
-                  <div class="backend-card-content">
-                    <div class="backend-card-header">
-                      <span class="backend-card-title">Metal (Apple Silicon)</span>
-                      <span class="tag-badge accent">macOS Metal</span>
-                    </div>
-                    <div class="backend-card-desc">Native Apple Silicon GPU & unified memory acceleration for M1, M2, M3, M4 Macs.</div>
-                  </div>
-                </label>
-
-                <label class="backend-radio-card" id="card-backend-cuda">
-                  <input type="radio" name="opt-backend" value="cuda" id="radio-backend-cuda" checked />
-                  <div class="backend-card-content">
-                    <div class="backend-card-header">
-                      <span class="backend-card-title">CUDA (NVIDIA)</span>
-                      <span class="tag-badge accent">NVIDIA GPU</span>
-                    </div>
-                    <div class="backend-card-desc">Offloads tensor operations to NVIDIA CUDA cores. Recommended for GeForce RTX / GTX GPUs.</div>
-                  </div>
-                </label>
-
-                <label class="backend-radio-card" id="card-backend-rocm">
-                  <input type="radio" name="opt-backend" value="rocm" id="radio-backend-rocm" />
-                  <div class="backend-card-content">
-                    <div class="backend-card-header">
-                      <span class="backend-card-title">ROCm (AMD HIP)</span>
-                      <span class="tag-badge">AMD GPU</span>
-                    </div>
-                    <div class="backend-card-desc">Dedicated AMD Radeon ROCm compute stack for Linux and compatible hardware.</div>
-                  </div>
-                </label>
-
-                <label class="backend-radio-card" id="card-backend-vulkan">
-                  <input type="radio" name="opt-backend" value="vulkan" id="radio-backend-vulkan" />
-                  <div class="backend-card-content">
-                    <div class="backend-card-header">
-                      <span class="backend-card-title">Vulkan (AMD / Universal)</span>
-                      <span class="tag-badge">Universal GPU</span>
-                    </div>
-                    <div class="backend-card-desc">Universal shader-based GPU acceleration for AMD Radeon, Intel Arc, or systems without proprietary drivers.</div>
-                  </div>
-                </label>
-
-                <label class="backend-radio-card" id="card-backend-cpu">
-                  <input type="radio" name="opt-backend" value="cpu" id="radio-backend-cpu" />
-                  <div class="backend-card-content">
-                    <div class="backend-card-header">
-                      <span class="backend-card-title">CPU (Universal)</span>
-                      <span class="tag-badge">x86_64 / ARM64</span>
-                    </div>
-                    <div class="backend-card-desc">Pure CPU inference with AVX2 or ARM NEON vector instructions. Highly portable across all hardware.</div>
-                  </div>
-                </label>
-              </div>
-
-              <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 14px; border-top: 1px solid var(--border-subtle); padding-top: 12px;">
-                <div style="font-size: 12px; color: var(--text-medium);" id="settings-backend-hint">
-                  Switching backend downloads and activates the official llama.cpp release variant.
-                </div>
-                <button class="btn btn-primary" id="btn-switch-backend">
-                  <i data-lucide="refresh-cw"></i>
-                  <span>Switch & Apply Backend</span>
-                </button>
+              <!-- List of Available & Installed Backends with Actions -->
+              <div class="backend-manager-grid" id="backend-manager-list">
+                <!-- Dynamically populated by main.ts -->
               </div>
             </div>
 

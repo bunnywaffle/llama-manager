@@ -220,6 +220,7 @@ async function loadBackendStatus() {
     const badge = $("#backend-status-badge");
     const verText = $("#backend-version-text");
     const varText = $("#backend-variant-text");
+    const uninstallBtn = document.querySelector<HTMLElement>("#btn-dash-uninstall-backend");
 
     if (b.installed) {
       alert.style.display = "none";
@@ -227,12 +228,16 @@ async function loadBackendStatus() {
       badge.className = "tag-badge accent";
       verText.textContent = b.version || "Installed";
       varText.textContent = (b.variant || "cuda").toUpperCase();
+      $("#dash-backend-val").textContent = `${(b.variant || "cuda").toUpperCase()} (${b.version || "Installed"})`;
+      if (uninstallBtn) uninstallBtn.style.display = "inline-flex";
     } else {
       alert.style.display = "flex";
       badge.textContent = "Missing";
       badge.className = "tag-badge";
       verText.textContent = "None";
       varText.textContent = "Uninstalled";
+      $("#dash-backend-val").textContent = "None (Uninstalled)";
+      if (uninstallBtn) uninstallBtn.style.display = "none";
     }
   } catch (err) {
     console.error("Backend status error:", err);
@@ -894,15 +899,181 @@ async function loadSettings() {
       backendTag.textContent = (s.activeBackend || "cuda").toUpperCase();
     }
 
-    const rad = document.querySelector<HTMLInputElement>(`input[name="opt-backend"][value="${s.activeBackend}"]`);
-    if (rad) rad.checked = true;
-
     const defSelect = document.querySelector<HTMLSelectElement>("#settings-default-model-select");
     if (defSelect && s.defaultModel) {
       defSelect.value = s.defaultModel;
     }
+
+    await renderBackendManager();
   } catch (err) {
     console.error("Load settings error:", err);
+  }
+}
+
+async function renderBackendManager() {
+  const container = document.querySelector<HTMLElement>("#backend-manager-list");
+  if (!container) return;
+
+  try {
+    const list = await LlamaService.getInstalledBackends();
+    container.innerHTML = "";
+
+    if (!list || list.length === 0) {
+      container.innerHTML = `<div style="text-align: center; color: var(--text-low); padding: 16px;">No backends available for your system architecture.</div>`;
+      return;
+    }
+
+    list.forEach((b) => {
+      const card = document.createElement("div");
+      card.className = `backend-manager-card ${b.isActive ? "active" : ""}`;
+
+      let badgeHtml = "";
+      if (b.isActive) {
+        badgeHtml = `<span class="tag-badge accent">CURRENT ACTIVE</span>`;
+      } else if (b.installed) {
+        badgeHtml = `<span class="tag-badge" style="color: #4ade80; border-color: rgba(74, 222, 128, 0.3);">INSTALLED</span>`;
+      } else {
+        badgeHtml = `<span class="tag-badge" style="color: var(--text-low);">NOT INSTALLED</span>`;
+      }
+
+      let metaText = "";
+      if (b.installed) {
+        metaText = `Version: ${b.version || "Installed"} • Executable: ${b.executablePath}`;
+      } else {
+        metaText = "Hardware accelerator runtime package ready for download and setup.";
+      }
+
+      let actionsHtml = "";
+      if (b.isActive) {
+        actionsHtml = `
+          <button class="btn btn-secondary btn-sm btn-uninstall-backend-card" data-variant="${b.variant}" title="Uninstall active backend">
+            <i data-lucide="trash-2"></i>
+            <span>Uninstall</span>
+          </button>
+        `;
+      } else if (b.installed) {
+        actionsHtml = `
+          <button class="btn btn-primary btn-sm btn-activate-backend-card" data-variant="${b.variant}" title="Switch active runtime to ${b.name}">
+            <i data-lucide="check"></i>
+            <span>Set Active</span>
+          </button>
+          <button class="btn btn-secondary btn-sm btn-uninstall-backend-card" data-variant="${b.variant}" title="Uninstall backend">
+            <i data-lucide="trash-2"></i>
+            <span>Uninstall</span>
+          </button>
+        `;
+      } else {
+        actionsHtml = `
+          <button class="btn btn-secondary btn-sm btn-install-backend-card" data-variant="${b.variant}" title="Download and install ${b.name}">
+            <i data-lucide="download"></i>
+            <span>Install</span>
+          </button>
+        `;
+      }
+
+      card.innerHTML = `
+        <div class="backend-manager-main">
+          <div class="backend-manager-title-row">
+            <span class="backend-manager-name">${b.name}</span>
+            ${badgeHtml}
+          </div>
+          <div class="backend-manager-meta">${metaText}</div>
+        </div>
+        <div class="backend-manager-actions">
+          ${actionsHtml}
+        </div>
+      `;
+
+      container.appendChild(card);
+    });
+
+    // Wire activate buttons
+    container.querySelectorAll<HTMLButtonElement>(".btn-activate-backend-card").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const variant = btn.dataset.variant;
+        if (!variant) return;
+
+        if (isServerRunning) {
+          const ok = await showConfirm(
+            "Switch Active Backend",
+            "The llama-server is currently running. Switching backend will stop the server. Continue?",
+            "Stop & Switch",
+            true
+          );
+          if (!ok) return;
+          await LlamaService.stopServer();
+        }
+
+        btn.disabled = true;
+        try {
+          await LlamaService.setActiveBackend(variant);
+          showToast(`Active backend switched to ${variant.toUpperCase()} successfully.`, "success", "Backend Activated");
+          await loadBackendStatus();
+          await loadSettings();
+        } catch (err: any) {
+          showToast(`Failed to activate backend: ${err.message || err}`, "error", "Activation Error");
+        } finally {
+          btn.disabled = false;
+        }
+      });
+    });
+
+    // Wire uninstall buttons
+    container.querySelectorAll<HTMLButtonElement>(".btn-uninstall-backend-card").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const variant = btn.dataset.variant;
+        if (!variant) return;
+
+        const ok = await showConfirm(
+          "Uninstall Backend",
+          `Are you sure you want to uninstall the ${variant.toUpperCase()} backend? All binary files and libraries for this backend will be deleted from disk.`,
+          "Uninstall",
+          true
+        );
+        if (!ok) return;
+
+        if (isServerRunning) {
+          await LlamaService.stopServer();
+        }
+
+        btn.disabled = true;
+        try {
+          await LlamaService.uninstallBackend(variant);
+          showToast(`Backend ${variant.toUpperCase()} uninstalled cleanly.`, "success", "Backend Uninstalled");
+          await loadBackendStatus();
+          await loadSettings();
+        } catch (err: any) {
+          showToast(`Failed to uninstall backend: ${err.message || err}`, "error", "Uninstall Error");
+        } finally {
+          btn.disabled = false;
+        }
+      });
+    });
+
+    // Wire install buttons
+    container.querySelectorAll<HTMLButtonElement>(".btn-install-backend-card").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const variant = btn.dataset.variant;
+        if (!variant) return;
+
+        btn.disabled = true;
+        try {
+          showToast(`Downloading and installing ${variant.toUpperCase()} backend...`, "info", "Downloading Backend");
+          await LlamaService.switchBackend(variant);
+          showToast(`Backend ${variant.toUpperCase()} installed and activated!`, "success", "Backend Installed");
+          await loadBackendStatus();
+          await loadSettings();
+        } catch (err: any) {
+          showToast(`Failed to install backend: ${err.message || err}`, "error", "Installation Error");
+        } finally {
+          btn.disabled = false;
+        }
+      });
+    });
+
+    renderIcons();
+  } catch (err) {
+    console.error("renderBackendManager error:", err);
   }
 }
 
@@ -960,29 +1131,63 @@ function setupSettings() {
     await LlamaService.saveSettings(s);
   });
 
-  // Switch Backend button
-  $("#btn-switch-backend")?.addEventListener("click", async () => {
-    const checked = document.querySelector<HTMLInputElement>('input[name="opt-backend"]:checked');
-    if (!checked) return;
-    const variant = checked.value; // "cuda", "vulkan", "cpu"
+  // Uninstall All Backends
+  $("#btn-uninstall-all-backends")?.addEventListener("click", async () => {
+    const ok = await showConfirm(
+      "Uninstall All Backends",
+      "Are you sure you want to uninstall ALL llama.cpp backends and wipe the bin folder? You will need to install a backend before running models again.",
+      "Uninstall All",
+      true
+    );
+    if (!ok) return;
 
-    const btn = document.querySelector<HTMLButtonElement>("#btn-switch-backend");
+    if (isServerRunning) {
+      await LlamaService.stopServer();
+    }
+
+    const btn = document.querySelector<HTMLButtonElement>("#btn-uninstall-all-backends");
     if (btn) btn.disabled = true;
-
     try {
-      if (isServerRunning) {
-        await LlamaService.stopServer();
-        showToast("Stopped current server to switch backend runtime.", "info", "Server Stopped");
-      }
-
-      await LlamaService.switchBackend(variant);
-      showToast(`Backend switched to ${variant.toUpperCase()} successfully.`, "success", "Backend Switched");
+      await LlamaService.uninstallAllBackends();
+      showToast("All backends uninstalled and bin folder cleaned.", "success", "Backends Removed");
       await loadBackendStatus();
       await loadSettings();
     } catch (err: any) {
-      showToast(`Backend switch failed: ${err.message || err}`, "error", "Switch Error");
+      showToast(`Failed to uninstall all backends: ${err.message || err}`, "error", "Uninstall Error");
     } finally {
       if (btn) btn.disabled = false;
+    }
+  });
+
+  // Overview quick action buttons
+  $("#btn-dash-manage-backend")?.addEventListener("click", () => {
+    const nav = document.querySelector<HTMLElement>('[data-tab="settings"]');
+    nav?.click();
+  });
+
+  $("#btn-dash-uninstall-backend")?.addEventListener("click", async () => {
+    const b = await LlamaService.getInstalledBackend();
+    if (!b.installed) return;
+    const variantName = (b.variant || "current").toUpperCase();
+    const ok = await showConfirm(
+      "Uninstall Active Backend",
+      `Are you sure you want to uninstall the ${variantName} backend?`,
+      "Uninstall",
+      true
+    );
+    if (!ok) return;
+
+    if (isServerRunning) {
+      await LlamaService.stopServer();
+    }
+
+    try {
+      await LlamaService.uninstallBackend(b.variant);
+      showToast(`Backend ${variantName} uninstalled cleanly.`, "success", "Backend Uninstalled");
+      await loadBackendStatus();
+      await loadSettings();
+    } catch (err: any) {
+      showToast(`Failed to uninstall backend: ${err.message || err}`, "error", "Uninstall Error");
     }
   });
 }

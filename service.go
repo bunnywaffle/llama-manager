@@ -71,7 +71,7 @@ func NewLlamaService(appDataDir string) *LlamaService {
 		appDataDir: appDataDir,
 		settings:   settings,
 		hwInfo:     hw,
-		releaseMgr: NewReleaseManager(binDir),
+		releaseMgr: NewReleaseManager(binDir, appDataDir),
 		modelMgr:   NewModelManager(modelsDir, appDataDir),
 		serverMgr:  NewServerManager(binDir),
 	}
@@ -211,6 +211,102 @@ func (s *LlamaService) SwitchBackend(variant string) error {
 // GetInstalledBackend checks if llama-server.exe is installed and which version/variant.
 func (s *LlamaService) GetInstalledBackend() BackendStatus {
 	return s.releaseMgr.GetInstalledBackend()
+}
+
+// GetInstalledBackends returns all available backend variants and their installation/active status.
+func (s *LlamaService) GetInstalledBackends() []BackendVariantInfo {
+	s.mu.Lock()
+	active := s.settings.ActiveBackend
+	s.mu.Unlock()
+	return s.releaseMgr.GetInstalledBackends(active)
+}
+
+// SetActiveBackend switches the current active backend to an installed variant.
+func (s *LlamaService) SetActiveBackend(variant string) error {
+	// Stop running server before switching
+	_ = s.serverMgr.Stop()
+
+	if err := s.releaseMgr.ActivateBackend(variant); err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	s.settings.ActiveBackend = variant
+	_ = s.saveSettingsToFile()
+	win := s.win
+	s.mu.Unlock()
+
+	if win != nil {
+		_ = ServerStatusEvent.Emit(win, s.serverMgr.GetStatus())
+	}
+
+	return nil
+}
+
+// UninstallBackend uninstalls a specific backend variant and cleans up binaries.
+func (s *LlamaService) UninstallBackend(variant string) error {
+	s.mu.Lock()
+	active := s.settings.ActiveBackend
+	s.mu.Unlock()
+
+	if active == variant {
+		_ = s.serverMgr.Stop()
+	}
+
+	if err := s.releaseMgr.UninstallBackend(variant, active); err != nil {
+		return err
+	}
+
+	// Update active backend if the uninstalled one was active
+	if active == variant {
+		installed := s.releaseMgr.GetInstalledBackends("")
+		var newActive string
+		for _, b := range installed {
+			if b.Installed {
+				newActive = b.Variant
+				break
+			}
+		}
+
+		if newActive != "" {
+			_ = s.releaseMgr.ActivateBackend(newActive)
+		}
+
+		s.mu.Lock()
+		s.settings.ActiveBackend = newActive
+		_ = s.saveSettingsToFile()
+		s.mu.Unlock()
+	}
+
+	s.mu.Lock()
+	win := s.win
+	s.mu.Unlock()
+	if win != nil {
+		_ = ServerStatusEvent.Emit(win, s.serverMgr.GetStatus())
+	}
+
+	return nil
+}
+
+// UninstallAllBackends completely deletes all installed backends and clears the bin folder.
+func (s *LlamaService) UninstallAllBackends() error {
+	_ = s.serverMgr.Stop()
+
+	if err := s.releaseMgr.UninstallAllBackends(); err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	s.settings.ActiveBackend = ""
+	_ = s.saveSettingsToFile()
+	win := s.win
+	s.mu.Unlock()
+
+	if win != nil {
+		_ = ServerStatusEvent.Emit(win, s.serverMgr.GetStatus())
+	}
+
+	return nil
 }
 
 // CheckReleases queries GitHub for recent llama.cpp releases.

@@ -24,6 +24,16 @@ export interface BackendStatus {
   latestVersion: string;
 }
 
+export interface BackendVariantInfo {
+  variant: string;
+  name: string;
+  version: string;
+  executablePath: string;
+  installed: boolean;
+  isActive: boolean;
+  devices?: string;
+}
+
 /** ChatMessage represents a message in OpenAI compatible chat format. */
 export interface ChatMessage {
   role: string;
@@ -306,6 +316,22 @@ export const LlamaService = {
   /** SwitchBackend downloads or switches the active backend variant (cuda, vulkan, cpu). */
   switchBackend(variant: string): Promise<void> {
     return call("LlamaService.SwitchBackend", variant);
+  },
+  /** GetInstalledBackends returns all available backend variants and their installation/active status. */
+  getInstalledBackends(): Promise<BackendVariantInfo[]> {
+    return call("LlamaService.GetInstalledBackends");
+  },
+  /** SetActiveBackend switches the current active backend to an installed variant. */
+  setActiveBackend(variant: string): Promise<void> {
+    return call("LlamaService.SetActiveBackend", variant);
+  },
+  /** UninstallBackend uninstalls a specific backend variant and cleans up binaries. */
+  uninstallBackend(variant: string): Promise<void> {
+    return call("LlamaService.UninstallBackend", variant);
+  },
+  /** UninstallAllBackends completely deletes all installed backends and clears the bin folder. */
+  uninstallAllBackends(): Promise<void> {
+    return call("LlamaService.UninstallAllBackends");
   },
 } as const;
 

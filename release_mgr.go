@@ -88,6 +88,17 @@ type BackendStatus struct {
 	LatestVersion   string `json:"latestVersion"`
 }
 
+// BackendVariantInfo details each supported backend variant and whether it is installed/active.
+type BackendVariantInfo struct {
+	Variant        string `json:"variant"` // "cuda", "vulkan", "cpu", "metal", "rocm"
+	Name           string `json:"name"`
+	Version        string `json:"version"`
+	ExecutablePath string `json:"executablePath"`
+	Installed      bool   `json:"installed"`
+	IsActive       bool   `json:"isActive"`
+	Devices        string `json:"devices,omitempty"`
+}
+
 // ProgressReport reports progress of a background download/extract operation.
 type ProgressReport struct {
 	Task       string  `json:"task"` // "download_llama", "download_model", etc.
@@ -102,17 +113,20 @@ type ProgressReport struct {
 
 type ReleaseManager struct {
 	binDir     string
+	appDataDir string
 	client     *http.Client
 	mu         sync.Mutex
 	isBusy     bool
 	cancelChan chan struct{}
 }
 
-func NewReleaseManager(binDir string) *ReleaseManager {
+func NewReleaseManager(binDir, appDataDir string) *ReleaseManager {
 	_ = os.MkdirAll(binDir, 0755)
+	_ = os.MkdirAll(filepath.Join(appDataDir, "backends"), 0755)
 	return &ReleaseManager{
-		binDir: binDir,
-		client: &http.Client{Timeout: 60 * time.Second},
+		binDir:     binDir,
+		appDataDir: appDataDir,
+		client:     &http.Client{Timeout: 60 * time.Second},
 	}
 }
 
@@ -148,11 +162,132 @@ func (rm *ReleaseManager) GetInstalledBackend() BackendStatus {
 			status.Variant = strings.TrimSpace(lines[1])
 		}
 	} else if status.HasServer {
-		status.Version = "Custom / Unspecified"
+		status.Version = "Installed"
 		status.Variant = "unknown"
 	}
 
 	return status
+}
+
+func (rm *ReleaseManager) GetInstalledBackends(activeVariant string) []BackendVariantInfo {
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+
+	backendsDir := filepath.Join(rm.appDataDir, "backends")
+	var variants []string
+	switch runtime.GOOS {
+	case "darwin":
+		variants = []string{"metal", "cpu"}
+	case "linux":
+		variants = []string{"cuda", "rocm", "vulkan", "cpu"}
+	default:
+		variants = []string{"cuda", "vulkan", "cpu"}
+	}
+
+	var results []BackendVariantInfo
+	for _, v := range variants {
+		info := BackendVariantInfo{
+			Variant:  v,
+			Name:     formatBackendDisplayName(v),
+			IsActive: (activeVariant == v),
+		}
+
+		targetDir := filepath.Join(backendsDir, v)
+		targetExe := filepath.Join(targetDir, getServerExeName())
+		legacyExe := filepath.Join(rm.binDir, getServerExeName())
+
+		var foundExe string
+		if _, err := os.Stat(targetExe); err == nil {
+			foundExe = targetExe
+		} else if activeVariant == v {
+			if _, err := os.Stat(legacyExe); err == nil {
+				foundExe = legacyExe
+				targetDir = rm.binDir
+			}
+		}
+
+		if foundExe != "" {
+			info.Installed = true
+			info.ExecutablePath = foundExe
+			if vData, err := os.ReadFile(filepath.Join(targetDir, "version.txt")); err == nil {
+				lines := strings.Split(strings.TrimSpace(string(vData)), "\n")
+				if len(lines) > 0 {
+					info.Version = strings.TrimSpace(lines[0])
+				}
+			} else {
+				info.Version = "Installed"
+			}
+		}
+
+		results = append(results, info)
+	}
+
+	return results
+}
+
+func formatBackendDisplayName(v string) string {
+	switch v {
+	case "cuda":
+		return "NVIDIA CUDA (RTX / GTX)"
+	case "vulkan":
+		return "Vulkan (Universal GPU)"
+	case "cpu":
+		return "CPU (Native SIMD)"
+	case "metal":
+		return "Apple Silicon Metal"
+	case "rocm":
+		return "AMD ROCm / HIP"
+	default:
+		return strings.ToUpper(v)
+	}
+}
+
+func (rm *ReleaseManager) UninstallBackend(variant, activeVariant string) error {
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+
+	backendsDir := filepath.Join(rm.appDataDir, "backends")
+	targetDir := filepath.Join(backendsDir, variant)
+	_ = os.RemoveAll(targetDir)
+
+	if variant == activeVariant || activeVariant == "" {
+		_ = os.RemoveAll(rm.binDir)
+		_ = os.MkdirAll(rm.binDir, 0755)
+	}
+
+	return nil
+}
+
+func (rm *ReleaseManager) UninstallAllBackends() error {
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+
+	backendsDir := filepath.Join(rm.appDataDir, "backends")
+	_ = os.RemoveAll(backendsDir)
+	_ = os.MkdirAll(backendsDir, 0755)
+
+	_ = os.RemoveAll(rm.binDir)
+	_ = os.MkdirAll(rm.binDir, 0755)
+
+	return nil
+}
+
+func (rm *ReleaseManager) ActivateBackend(variant string) error {
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+
+	backendsDir := filepath.Join(rm.appDataDir, "backends")
+	targetDir := filepath.Join(backendsDir, variant)
+	targetExe := filepath.Join(targetDir, getServerExeName())
+
+	if _, err := os.Stat(targetExe); err != nil {
+		return fmt.Errorf("backend %s is not installed in %s", variant, targetDir)
+	}
+
+	_ = os.RemoveAll(rm.binDir)
+	_ = os.MkdirAll(rm.binDir, 0755)
+
+	return copyDir(targetDir, rm.binDir)
 }
 
 func (rm *ReleaseManager) CheckReleases() ([]ReleaseInfo, error) {
@@ -260,20 +395,13 @@ func (rm *ReleaseManager) DownloadAndInstall(tag, variant string, onProgress fun
 	var primaryAsset *ReleaseAsset
 	var cudartAsset *ReleaseAsset
 
+	// Step 1: Find primary binary archive for variant
 	for i := range targetRelease.Assets {
 		a := &targetRelease.Assets[i]
 		if !isAssetCompatibleWithHost(a.Name) {
 			continue
 		}
 		lower := strings.ToLower(a.Name)
-
-		if strings.HasPrefix(lower, "cudart-") {
-			if variant == "cuda" && (cudartAsset == nil || strings.Contains(lower, "12.4") || strings.Contains(lower, "12")) {
-				cudartAsset = a
-			}
-			continue
-		}
-
 		if !strings.HasPrefix(lower, "llama-") {
 			continue
 		}
@@ -284,8 +412,8 @@ func (rm *ReleaseManager) DownloadAndInstall(tag, variant string, onProgress fun
 				primaryAsset = a
 			}
 		case "cuda":
-			if strings.Contains(lower, "cuda") || strings.Contains(lower, "cu12") || strings.Contains(lower, "cu11") {
-				if primaryAsset == nil || strings.Contains(lower, "12.4") || strings.Contains(lower, "12") {
+			if strings.Contains(lower, "cuda") || strings.Contains(lower, "cu12") || strings.Contains(lower, "cu13") || strings.Contains(lower, "cu11") {
+				if primaryAsset == nil || strings.Contains(lower, "13.4") || strings.Contains(lower, "12.4") {
 					primaryAsset = a
 				}
 			}
@@ -320,40 +448,72 @@ func (rm *ReleaseManager) DownloadAndInstall(tag, variant string, onProgress fun
 		return fmt.Errorf("no matching binary found for %s on %s/%s in release %s", variant, runtime.GOOS, runtime.GOARCH, tag)
 	}
 
-	tempDir := filepath.Join(rm.binDir, "tmp_download")
+	// Step 2: For CUDA, match cudart archive with EXACT version harmony
+	if variant == "cuda" && primaryAsset != nil {
+		targetVer := ""
+		pLower := strings.ToLower(primaryAsset.Name)
+		if strings.Contains(pLower, "13.4") {
+			targetVer = "13.4"
+		} else if strings.Contains(pLower, "12.4") {
+			targetVer = "12.4"
+		} else if strings.Contains(pLower, "12.2") {
+			targetVer = "12.2"
+		} else if strings.Contains(pLower, "11.8") {
+			targetVer = "11.8"
+		}
+
+		for i := range targetRelease.Assets {
+			a := &targetRelease.Assets[i]
+			if !isAssetCompatibleWithHost(a.Name) {
+				continue
+			}
+			lower := strings.ToLower(a.Name)
+			if strings.HasPrefix(lower, "cudart-") {
+				if targetVer != "" && strings.Contains(lower, targetVer) {
+					cudartAsset = a
+					break
+				} else if cudartAsset == nil {
+					cudartAsset = a
+				}
+			}
+		}
+	}
+
+	backendsDir := filepath.Join(rm.appDataDir, "backends")
+	targetDir := filepath.Join(backendsDir, variant)
+	_ = os.RemoveAll(targetDir)
+	_ = os.MkdirAll(targetDir, 0755)
+
+	tempDir := filepath.Join(rm.appDataDir, "tmp_download")
 	_ = os.RemoveAll(tempDir)
 	_ = os.MkdirAll(tempDir, 0755)
 	defer os.RemoveAll(tempDir)
 
-	// Step 1: Download Primary Llama Binary Archive
-	primaryArchive := filepath.Join(tempDir, primaryAsset.Name)
-	if err := rm.downloadFile(primaryAsset.DownloadURL, primaryArchive, primaryAsset.Name, primaryAsset.Size, onProgress); err != nil {
-		return err
-	}
-
-	// Step 2: Download CUDA runtime DLLs if applicable
+	// Step 3: Download & Extract CUDA runtime DLLs if applicable
 	if variant == "cuda" && cudartAsset != nil {
 		cudartArchive := filepath.Join(tempDir, cudartAsset.Name)
 		if err := rm.downloadFile(cudartAsset.DownloadURL, cudartArchive, cudartAsset.Name, cudartAsset.Size, onProgress); err != nil {
 			return err
 		}
-		// Extract cudart
-		if err := rm.extractArchive(cudartArchive, rm.binDir, onProgress); err != nil {
+		if err := rm.extractArchive(cudartArchive, targetDir, onProgress); err != nil {
 			return err
 		}
 	}
 
-	// Step 3: Extract Primary Llama Binaries
-	if err := rm.extractArchive(primaryArchive, rm.binDir, onProgress); err != nil {
+	// Step 4: Download & Extract Primary Llama Binaries
+	primaryArchive := filepath.Join(tempDir, primaryAsset.Name)
+	if err := rm.downloadFile(primaryAsset.DownloadURL, primaryArchive, primaryAsset.Name, primaryAsset.Size, onProgress); err != nil {
+		return err
+	}
+	if err := rm.extractArchive(primaryArchive, targetDir, onProgress); err != nil {
 		return err
 	}
 
-	// Ensure llama-server executable is directly at the root of binDir
+	// Ensure llama-server executable is directly at the root of targetDir
 	serverExeName := getServerExeName()
-	serverExe := filepath.Join(rm.binDir, serverExeName)
+	serverExe := filepath.Join(targetDir, serverExeName)
 	if _, err := os.Stat(serverExe); err != nil {
-		// If nested in a subfolder, locate and move it up to rm.binDir
-		_ = filepath.Walk(rm.binDir, func(path string, info os.FileInfo, err error) error {
+		_ = filepath.Walk(targetDir, func(path string, info os.FileInfo, err error) error {
 			if err == nil && !info.IsDir() && info.Name() == serverExeName {
 				_ = os.Rename(path, serverExe)
 			}
@@ -365,9 +525,14 @@ func (rm *ReleaseManager) DownloadAndInstall(tag, variant string, onProgress fun
 		_ = os.Chmod(serverExe, 0755)
 	}
 
-	// Write version tag and variant
-	versionFile := filepath.Join(rm.binDir, "version.txt")
+	// Write version tag and variant in targetDir
+	versionFile := filepath.Join(targetDir, "version.txt")
 	_ = os.WriteFile(versionFile, []byte(fmt.Sprintf("%s\n%s\n", tag, variant)), 0644)
+
+	// Step 5: Mirror targetDir cleanly into rm.binDir as the active backend
+	_ = os.RemoveAll(rm.binDir)
+	_ = os.MkdirAll(rm.binDir, 0755)
+	_ = copyDir(targetDir, rm.binDir)
 
 	onProgress(ProgressReport{
 		Task:     "download_llama",
@@ -570,6 +735,40 @@ func (rm *ReleaseManager) extractTarGz(srcTarGz, dstDir string, onProgress func(
 		outFile.Close()
 	}
 
+	return nil
+}
+
+func copyDir(src, dst string) error {
+	_ = os.MkdirAll(dst, 0755)
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		srcPath := filepath.Join(src, entry.Name())
+		dstPath := filepath.Join(dst, entry.Name())
+		if entry.IsDir() {
+			if err := copyDir(srcPath, dstPath); err != nil {
+				return err
+			}
+		} else {
+			in, err := os.Open(srcPath)
+			if err != nil {
+				return err
+			}
+			out, err := os.OpenFile(dstPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0755)
+			if err != nil {
+				in.Close()
+				return err
+			}
+			_, err = io.Copy(out, in)
+			in.Close()
+			out.Close()
+			if err != nil {
+				return err
+			}
+		}
+	}
 	return nil
 }
 
