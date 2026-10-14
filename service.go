@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -154,6 +155,32 @@ func (s *LlamaService) SelectFolderDialog(title string) (string, error) {
 		Title:     title,
 		Directory: true,
 		Multiple:  false,
+	})
+	if err != nil {
+		return "", err
+	}
+	if len(paths) == 0 || paths[0] == "" {
+		return "", nil // cancelled
+	}
+	return paths[0], nil
+}
+
+// SelectFileDialog opens a native file picker to select a file with filter.
+func (s *LlamaService) SelectFileDialog(title string, filterName string, extension string) (string, error) {
+	s.mu.Lock()
+	win := s.win
+	s.mu.Unlock()
+
+	filters := []mygo.FileFilter{
+		{Name: fmt.Sprintf("%s (*.%s)", filterName, extension), Extensions: []string{extension}},
+		{Name: "All Files (*.*)", Extensions: []string{"*"}},
+	}
+
+	paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
+		Parent:   win,
+		Title:    title,
+		Filters:  filters,
+		Multiple: false,
 	})
 	if err != nil {
 		return "", err

@@ -188,6 +188,75 @@
                   </button>
                 </div>
               </div>
+
+              <!-- Compact Linked Models Drawer (Vision & Drafter MTP) -->
+              <details class="adv-accordion" style="margin-top: 12px;" id="details-linked-models">
+                <summary class="adv-summary" style="padding: 6px 12px; font-size: 12px; border-radius: var(--radius-sm); background: var(--bg-surface-elevated, rgba(255,255,255,0.03));">
+                  <div class="adv-summary-left">
+                    <i data-lucide="layers"></i>
+                    <span style="font-weight: 500;">Vision Projector & Drafter (MTP) Models</span>
+                  </div>
+                  <span class="adv-summary-meta" id="dash-linked-meta">None active</span>
+                </summary>
+                <div class="adv-content" style="padding: 10px 12px; gap: 10px;">
+                  <!-- Vision Encoder Row -->
+                  <div style="display: flex; flex-direction: column; gap: 4px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                      <label class="form-label" style="font-size: 11px; margin-bottom: 0;">Vision Projector (--mmproj)</label>
+                      <span style="font-size: 11px; color: var(--text-low);">CLIP / Vision projector file</span>
+                    </div>
+                    <div class="path-input-group">
+                      <input type="text" class="form-input path-input" id="cfg-mmproj" placeholder="No vision projector linked (Optional)" readonly />
+                      <button class="btn btn-secondary btn-sm" id="btn-browse-mmproj" title="Select Vision Projector GGUF">
+                        <i data-lucide="folder-input"></i>
+                        <span>Link...</span>
+                      </button>
+                      <button class="btn btn-secondary btn-sm" id="btn-clear-mmproj" title="Clear Vision Projector">
+                        <i data-lucide="x"></i>
+                      </button>
+                    </div>
+                  </div>
+
+                  <!-- Drafter / Speculative Decoding MTP Row -->
+                  <div style="display: flex; flex-direction: column; gap: 4px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                      <label class="form-label" style="font-size: 11px; margin-bottom: 0;">Drafter Model (--model-draft / -md)</label>
+                      <span style="font-size: 11px; color: var(--text-low);">Speculative decoding / MTP</span>
+                    </div>
+                    <div class="path-input-group">
+                      <input type="text" class="form-input path-input" id="cfg-draft-model" placeholder="No drafter model linked (Optional)" readonly />
+                      <button class="btn btn-secondary btn-sm" id="btn-browse-draft-model" title="Select Drafter Model GGUF">
+                        <i data-lucide="folder-input"></i>
+                        <span>Link...</span>
+                      </button>
+                      <button class="btn btn-secondary btn-sm" id="btn-clear-draft-model" title="Clear Drafter Model">
+                        <i data-lucide="x"></i>
+                      </button>
+                    </div>
+                  </div>
+
+                  <!-- Drafter parameters in a compact mini-grid -->
+                  <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin-top: 4px;">
+                    <div class="form-field" style="margin-bottom: 0;">
+                      <label class="form-label" style="font-size: 10.5px;">Spec Type (--spec-type)</label>
+                      <select class="form-select" id="cfg-draft-type" style="padding: 4px 8px; font-size: 11px; height: 28px;">
+                        <option value="none">Auto (llama.cpp default)</option>
+                        <option value="draft-mtp">Multi-Token (draft-mtp)</option>
+                        <option value="draft-simple">Simple (draft-simple)</option>
+                        <option value="draft-eagle3">Eagle3 (draft-eagle3)</option>
+                      </select>
+                    </div>
+                    <div class="form-field" style="margin-bottom: 0;">
+                      <label class="form-label" style="font-size: 10.5px;">Draft Tokens (--spec-draft-n-max)</label>
+                      <input type="number" class="form-input" id="cfg-draft-tokens" value="4" min="1" max="16" style="padding: 4px 8px; font-size: 11px; height: 28px;" />
+                    </div>
+                    <div class="form-field" style="margin-bottom: 0;">
+                      <label class="form-label" style="font-size: 10.5px;">Draft GPU Layers (-ngld)</label>
+                      <input type="number" class="form-input" id="cfg-draft-layers" value="99" min="0" max="99" style="padding: 4px 8px; font-size: 11px; height: 28px;" />
+                    </div>
+                  </div>
+                </div>
+              </details>
             </div>
 
             <!-- Quick Inline Prompt Test -->

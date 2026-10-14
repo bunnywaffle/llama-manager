@@ -28,31 +28,10 @@ export interface Persona {
 
 export const DEFAULT_PERSONAS: Persona[] = [
   {
-    id: "general",
-    name: "General Assistant",
-    tagline: "Thoughtful & helpful assistant",
-    systemPrompt: "You are a helpful, thoughtful, and precise AI assistant. Answer accurately and clearly.",
-  },
-  {
-    id: "coder",
-    name: "Senior Software Engineer",
-    tagline: "Clean, robust, production code",
-    systemPrompt:
-      "You are an expert senior software engineer. Write clean, robust, and idiomatic code. Explain key architectural decisions concisely and always consider edge cases, performance, and best practices.",
-  },
-  {
-    id: "reasoning",
-    name: "Reasoning & Math",
-    tagline: "Step-by-step logic and proofs",
-    systemPrompt:
-      "You are a rigorous analytical and mathematical reasoning assistant. When presented with a problem, break it down systematically into logical steps and verify each premise before stating your conclusion.",
-  },
-  {
-    id: "concise",
-    name: "Concise / Minimalist",
-    tagline: "Direct facts, zero filler",
-    systemPrompt:
-      "You are a minimalist assistant. Provide the most direct, brief, and factual answer possible. Omit greetings, pleasantries, and unnecessary commentary.",
+    id: "default",
+    name: "Default Assistant",
+    tagline: "Basic AI assistant",
+    systemPrompt: "You are a helpful, harmless, and honest AI assistant.",
   },
 ];
 
@@ -146,7 +125,7 @@ export function setActiveSessionId(id: string): void {
   localStorage.setItem(STORAGE_KEY_ACTIVE, id);
 }
 
-export function createNewSession(personaId = "general"): ChatSession {
+export function createNewSession(personaId = "default"): ChatSession {
   const id = "sess_" + Date.now() + "_" + Math.random().toString(36).slice(2, 7);
   const session: ChatSession = {
     id,

@@ -6,7 +6,9 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -104,7 +106,7 @@ func (mm *ModelManager) ListModels() ([]ModelInfo, error) {
 	var models []ModelInfo
 	seenPaths := make(map[string]bool)
 
-	// 1. Scan default models directory
+	// 1. Scan default models directory (including symlinks)
 	entries, err := os.ReadDir(dir)
 	if err == nil {
 		for _, entry := range entries {
@@ -112,22 +114,31 @@ func (mm *ModelManager) ListModels() ([]ModelInfo, error) {
 				continue
 			}
 
-			info, err := entry.Info()
-			if err != nil || info.Size() < 1024*1024 {
-				continue // Skip corrupt or 0-byte files
+			p := filepath.Join(dir, entry.Name())
+			targetInfo, err := os.Stat(p) // Resolves symlink to inspect target file
+			if err != nil || targetInfo.Size() < 1024*1024 {
+				continue // Skip corrupt or 0-byte files or broken symlinks
 			}
 
-			p := filepath.Join(dir, entry.Name())
-			seenPaths[filepath.Clean(p)] = true
+			lstatInfo, _ := os.Lstat(p)
+			isSymlink := lstatInfo != nil && (lstatInfo.Mode()&os.ModeSymlink != 0)
+
+			cleanP := filepath.Clean(p)
+			seenPaths[cleanP] = true
+			if isSymlink {
+				if realTarget, err := filepath.EvalSymlinks(p); err == nil {
+					seenPaths[filepath.Clean(realTarget)] = true
+				}
+			}
 
 			models = append(models, ModelInfo{
 				Name:          entry.Name(),
 				Path:          p,
-				SizeBytes:     info.Size(),
-				SizeFormatted: formatBytes(info.Size()),
+				SizeBytes:     targetInfo.Size(),
+				SizeFormatted: formatBytes(targetInfo.Size()),
 				Quant:         detectQuant(entry.Name()),
-				ModifiedAt:    info.ModTime().Format("2006-01-02 15:04"),
-				IsExternal:    false,
+				ModifiedAt:    targetInfo.ModTime().Format("2006-01-02 15:04"),
+				IsExternal:    isSymlink,
 			})
 		}
 	}
@@ -197,14 +208,37 @@ func (mm *ModelManager) DeleteModel(identifier string) error {
 		return nil
 	}
 
-	// Try removing direct path first if it exists
+	// If the file in modelsDir is a symlink or file, os.Remove safely deletes only the link/file
+	target := filepath.Join(mm.modelsDir, baseIdent)
+	if _, err := os.Lstat(target); err == nil {
+		return os.Remove(target)
+	}
+
+	// Try removing direct path first if it exists outside modelsDir
 	if _, err := os.Stat(cleanIdent); err == nil && !strings.EqualFold(filepath.Dir(cleanIdent), mm.modelsDir) {
 		return os.Remove(cleanIdent)
 	}
 
-	// Otherwise, delete from modelsDir
-	target := filepath.Join(mm.modelsDir, baseIdent)
 	return os.Remove(target)
+}
+
+func createSymlink(target, link string) error {
+	_ = os.Remove(link)
+
+	// Try standard os.Symlink first
+	if err := os.Symlink(target, link); err == nil {
+		return nil
+	}
+
+	// On Windows, fall back to mklink via cmd
+	if runtime.GOOS == "windows" {
+		cmd := prepareCmd(exec.Command("cmd", "/c", "mklink", link, target))
+		if out, err := cmd.CombinedOutput(); err == nil && !strings.Contains(strings.ToLower(string(out)), "error") {
+			return nil
+		}
+	}
+
+	return fmt.Errorf("symlink not supported")
 }
 
 func (mm *ModelManager) ImportModel(sourcePath string) (ModelInfo, error) {
@@ -243,9 +277,8 @@ func (mm *ModelManager) ImportModel(sourcePath string) (ModelInfo, error) {
 		}, nil
 	}
 
-	// Case 2: Try hardlink (instant on same volume)
-	_ = os.Remove(destPath)
-	if err := os.Link(cleanSource, destPath); err == nil {
+	// Case 2: Create symbolic link in modelsDir (0 extra disk space, instant)
+	if err := createSymlink(cleanSource, destPath); err == nil {
 		return ModelInfo{
 			Name:          destName,
 			Path:          destPath,
@@ -253,11 +286,11 @@ func (mm *ModelManager) ImportModel(sourcePath string) (ModelInfo, error) {
 			SizeFormatted: formatBytes(srcInfo.Size()),
 			Quant:         detectQuant(destName),
 			ModifiedAt:    srcInfo.ModTime().Format("2006-01-02 15:04"),
-			IsExternal:    false,
+			IsExternal:    true,
 		}, nil
 	}
 
-	// Case 3: Register in-place (instant, 0 disk space across volumes)
+	// Case 3: Register in-place (instant, 0 disk space across volumes if OS restricts symlinks)
 	mm.mu.Lock()
 	alreadyRegistered := false
 	for _, p := range mm.registeredPaths {

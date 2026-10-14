@@ -170,6 +170,13 @@ export interface ServerConfig {
   /** Router Mode (Multi-model dynamic serving) */
   routerMode: boolean;
   modelsDir: string;
+  /** Vision & Multimodal Projector */
+  mmprojPath: string;
+  /** Speculative Decoding & Drafter Model (MTP) */
+  draftModelPath: string;
+  draftMaxTokens: number;
+  draftGpuLayers: number;
+  draftSpecType: string;
 }
 
 /** ServerStatus describes the runtime state of the backend. */
@@ -287,6 +294,10 @@ export const LlamaService = {
   /** SaveSettings updates and persists the application settings. */
   saveSettings(settings: AppSettings): Promise<void> {
     return call("LlamaService.SaveSettings", settings);
+  },
+  /** SelectFileDialog opens a native file picker to select a file with filter. */
+  selectFileDialog(title: string, filterName: string, extension: string): Promise<string> {
+    return call("LlamaService.SelectFileDialog", title, filterName, extension);
   },
   /** SelectFolderDialog opens native folder picker to select a directory. */
   selectFolderDialog(title: string): Promise<string> {

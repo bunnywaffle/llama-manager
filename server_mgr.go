@@ -66,6 +66,15 @@ type ServerConfig struct {
 	// Router Mode (Multi-model dynamic serving)
 	RouterMode bool   `json:"routerMode"`
 	ModelsDir  string `json:"modelsDir"`
+
+	// Vision & Multimodal Projector
+	MMProjPath string `json:"mmprojPath"`
+
+	// Speculative Decoding & Drafter Model (MTP)
+	DraftModelPath string `json:"draftModelPath"`
+	DraftMaxTokens int    `json:"draftMaxTokens"`
+	DraftGPULayers int    `json:"draftGpuLayers"`
+	DraftSpecType  string `json:"draftSpecType"`
 }
 
 
@@ -208,6 +217,29 @@ func (sm *ServerManager) Start(cfg ServerConfig) error {
 		}
 	} else {
 		args = append(args, "-m", cfg.ModelPath)
+	}
+
+	// Vision Projector / Multimodal Encoder (--mmproj)
+	if strings.TrimSpace(cfg.MMProjPath) != "" {
+		if _, err := os.Stat(cfg.MMProjPath); err == nil {
+			args = append(args, "--mmproj", cfg.MMProjPath)
+		}
+	}
+
+	// Speculative Decoding & MTP Draft Model (-md)
+	if strings.TrimSpace(cfg.DraftModelPath) != "" {
+		if _, err := os.Stat(cfg.DraftModelPath); err == nil {
+			args = append(args, "-md", cfg.DraftModelPath)
+			if cfg.DraftMaxTokens > 0 {
+				args = append(args, "--spec-draft-n-max", strconv.Itoa(cfg.DraftMaxTokens))
+			}
+			if cfg.DraftGPULayers > 0 {
+				args = append(args, "--spec-draft-ngl", strconv.Itoa(cfg.DraftGPULayers))
+			}
+			if cfg.DraftSpecType != "" && cfg.DraftSpecType != "none" {
+				args = append(args, "--spec-type", cfg.DraftSpecType)
+			}
+		}
 	}
 
 	if cfg.Threads > 0 {

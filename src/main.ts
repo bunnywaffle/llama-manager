@@ -27,6 +27,7 @@ import {
   Plus,
   Check,
   X,
+  Layers,
 } from "lucide";
 import {
   LlamaService,
@@ -89,6 +90,7 @@ function renderIcons() {
       Plus,
       Check,
       X,
+      Layers,
     },
   });
 }
@@ -262,14 +264,14 @@ async function loadModels() {
     models.forEach((m) => {
       const opt = document.createElement("option");
       opt.value = m.path;
-      opt.textContent = `${m.name} [${m.quant}] (${m.sizeFormatted})${m.isExternal ? " [Linked]" : ""}`;
+      opt.textContent = `${m.name} [${m.quant}] (${m.sizeFormatted})${m.isExternal ? " [Symlink]" : ""}`;
       quickSelect.appendChild(opt);
 
       const tr = document.createElement("tr");
       tr.innerHTML = `
         <td style="font-weight: 500; font-family: var(--font-mono); font-size: 12px;" title="${m.path}">
           ${m.name}
-          ${m.isExternal ? '<span class="tag-badge accent" style="font-size: 10px; margin-left: 6px;" title="Referenced in-place from external folder">Linked</span>' : ''}
+          ${m.isExternal ? '<span class="tag-badge accent" style="font-size: 10px; margin-left: 6px;" title="Symbolic link (0 extra disk space used)">Symlink</span>' : ''}
         </td>
         <td><span class="tag-badge">${m.quant}</span></td>
         <td style="font-family: var(--font-mono);">${m.sizeFormatted}</td>
@@ -437,7 +439,37 @@ function collectConfigFromUI(overrideModelPath?: string): ServerConfig {
     // Router Mode
     routerMode: $<HTMLInputElement>("#cfg-router-mode")?.checked ?? false,
     modelsDir: $<HTMLInputElement>("#settings-models-dir")?.value || "",
+
+    // Vision & Multimodal Projector
+    mmprojPath: $<HTMLInputElement>("#cfg-mmproj")?.value || "",
+
+    // Speculative Decoding & Drafter Model (MTP)
+    draftModelPath: $<HTMLInputElement>("#cfg-draft-model")?.value || "",
+    draftMaxTokens: Number($<HTMLInputElement>("#cfg-draft-tokens")?.value || 4),
+    draftGpuLayers: Number($<HTMLInputElement>("#cfg-draft-layers")?.value || 99),
+    draftSpecType: $<HTMLSelectElement>("#cfg-draft-type")?.value || "none",
   };
+}
+
+function updateLinkedModelsBadge() {
+  const meta = document.querySelector<HTMLElement>("#dash-linked-meta");
+  if (!meta) return;
+  const mm = document.querySelector<HTMLInputElement>("#cfg-mmproj")?.value.trim();
+  const dm = document.querySelector<HTMLInputElement>("#cfg-draft-model")?.value.trim();
+
+  if (mm && dm) {
+    meta.textContent = "Vision + Drafter (MTP) active";
+    meta.style.color = "var(--text-high)";
+  } else if (mm) {
+    meta.textContent = "Vision active";
+    meta.style.color = "var(--text-high)";
+  } else if (dm) {
+    meta.textContent = "Drafter (MTP) active";
+    meta.style.color = "var(--text-high)";
+  } else {
+    meta.textContent = "None active";
+    meta.style.color = "var(--text-low)";
+  }
 }
 
 function updateRouterModeUI(enabled: boolean) {
@@ -502,6 +534,24 @@ async function loadConfig() {
     $<HTMLSelectElement>("#cfg-rope-scaling").value = cfg.ropeScaling || "none";
     $<HTMLInputElement>("#cfg-rope-scale").value = String(cfg.ropeScale || 1.0);
     $<HTMLInputElement>("#cfg-rope-freq-base").value = String(cfg.ropeFreqBase || 0);
+
+    // Vision Projector & Drafter Model (MTP)
+    const mmprojInput = document.querySelector<HTMLInputElement>("#cfg-mmproj");
+    if (mmprojInput) mmprojInput.value = cfg.mmprojPath || "";
+
+    const draftInput = document.querySelector<HTMLInputElement>("#cfg-draft-model");
+    if (draftInput) draftInput.value = cfg.draftModelPath || "";
+
+    const draftTokens = document.querySelector<HTMLInputElement>("#cfg-draft-tokens");
+    if (draftTokens) draftTokens.value = String(cfg.draftMaxTokens || 4);
+
+    const draftLayers = document.querySelector<HTMLInputElement>("#cfg-draft-layers");
+    if (draftLayers) draftLayers.value = String(cfg.draftGpuLayers ?? 99);
+
+    const draftType = document.querySelector<HTMLSelectElement>("#cfg-draft-type");
+    if (draftType) draftType.value = cfg.draftSpecType || "none";
+
+    updateLinkedModelsBadge();
   } catch (err) {
     console.error("Load config error:", err);
   }
@@ -694,6 +744,50 @@ function setupActions() {
 
   $("#btn-import-gguf-dash")?.addEventListener("click", handleImport);
   $("#btn-import-gguf-models")?.addEventListener("click", handleImport);
+
+  // Vision Projector Browse / Clear
+  $("#btn-browse-mmproj")?.addEventListener("click", async () => {
+    try {
+      const selected = await LlamaService.selectFileDialog("Select Vision Projector (CLIP GGUF)", "Vision Projector GGUF", "gguf");
+      if (selected) {
+        const input = document.querySelector<HTMLInputElement>("#cfg-mmproj");
+        if (input) input.value = selected;
+        updateLinkedModelsBadge();
+        showToast(`Linked vision projector: ${selected.split(/[/\\]/).pop()}`, "success", "Vision Linked");
+      }
+    } catch (err: any) {
+      showToast(`Failed to select vision projector: ${err.message || err}`, "error", "Select Error");
+    }
+  });
+
+  $("#btn-clear-mmproj")?.addEventListener("click", () => {
+    const input = document.querySelector<HTMLInputElement>("#cfg-mmproj");
+    if (input) input.value = "";
+    updateLinkedModelsBadge();
+    showToast("Cleared vision projector link.", "info");
+  });
+
+  // Drafter Model Browse / Clear
+  $("#btn-browse-draft-model")?.addEventListener("click", async () => {
+    try {
+      const selected = await LlamaService.selectFileDialog("Select Drafter Model for Speculative Decoding", "Drafter Model GGUF", "gguf");
+      if (selected) {
+        const input = document.querySelector<HTMLInputElement>("#cfg-draft-model");
+        if (input) input.value = selected;
+        updateLinkedModelsBadge();
+        showToast(`Linked drafter model: ${selected.split(/[/\\]/).pop()}`, "success", "Drafter Linked");
+      }
+    } catch (err: any) {
+      showToast(`Failed to select drafter model: ${err.message || err}`, "error", "Select Error");
+    }
+  });
+
+  $("#btn-clear-draft-model")?.addEventListener("click", () => {
+    const input = document.querySelector<HTMLInputElement>("#cfg-draft-model");
+    if (input) input.value = "";
+    updateLinkedModelsBadge();
+    showToast("Cleared drafter model link.", "info");
+  });
 
   $("#btn-dash-start")?.addEventListener("click", startServerHandler);
   $("#btn-dash-stop")?.addEventListener("click", stopServerHandler);
@@ -1346,7 +1440,7 @@ function setupChat() {
   let currentSession: ChatSession;
 
   if (sessions.length === 0 || !currentSessionId) {
-    currentSession = createNewSession("general");
+    currentSession = createNewSession("default");
     sessions = [currentSession];
     currentSessionId = currentSession.id;
   } else {
@@ -1370,7 +1464,7 @@ function setupChat() {
       opt.textContent = `${p.name} ${p.isCustom ? "(Custom)" : ""}`;
       personaSelect.appendChild(opt);
     });
-    personaSelect.value = currentSession.personaId || "general";
+    personaSelect.value = currentSession.personaId || "default";
   }
 
   personaSelect.addEventListener("change", () => {
@@ -1492,7 +1586,7 @@ function setupChat() {
 
   // Create new thread
   btnNewThread.addEventListener("click", () => {
-    currentSession = createNewSession(personaSelect.value || "general");
+    currentSession = createNewSession(personaSelect.value || "default");
     currentSessionId = currentSession.id;
     renderSessions();
     renderPersonaOptions();
