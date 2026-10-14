@@ -80,6 +80,7 @@ export interface ModelInfo {
   sizeFormatted: string;
   quant: string;
   modifiedAt: string;
+  isExternal: boolean;
 }
 
 /** ProgressReport reports progress of a background download/extract operation. */

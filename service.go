@@ -72,7 +72,7 @@ func NewLlamaService(appDataDir string) *LlamaService {
 		settings:   settings,
 		hwInfo:     hw,
 		releaseMgr: NewReleaseManager(binDir),
-		modelMgr:   NewModelManager(modelsDir),
+		modelMgr:   NewModelManager(modelsDir, appDataDir),
 		serverMgr:  NewServerManager(binDir),
 	}
 
@@ -82,6 +82,15 @@ func NewLlamaService(appDataDir string) *LlamaService {
 		svc.mu.Unlock()
 		if win != nil {
 			_ = ServerLogEvent.Emit(win, line)
+		}
+	})
+
+	svc.serverMgr.SetStatusCallback(func(st ServerStatus) {
+		svc.mu.Lock()
+		win := svc.win
+		svc.mu.Unlock()
+		if win != nil {
+			_ = ServerStatusEvent.Emit(win, st)
 		}
 	})
 

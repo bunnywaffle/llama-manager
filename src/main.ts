@@ -257,19 +257,24 @@ async function loadModels() {
     models.forEach((m) => {
       const opt = document.createElement("option");
       opt.value = m.path;
-      opt.textContent = `${m.name} [${m.quant}] (${m.sizeFormatted})`;
+      opt.textContent = `${m.name} [${m.quant}] (${m.sizeFormatted})${m.isExternal ? " [Linked]" : ""}`;
       quickSelect.appendChild(opt);
 
       const tr = document.createElement("tr");
       tr.innerHTML = `
-        <td style="font-weight: 500; font-family: var(--font-mono); font-size: 12px;">${m.name}</td>
+        <td style="font-weight: 500; font-family: var(--font-mono); font-size: 12px;" title="${m.path}">
+          ${m.name}
+          ${m.isExternal ? '<span class="tag-badge accent" style="font-size: 10px; margin-left: 6px;" title="Referenced in-place from external folder">Linked</span>' : ''}
+        </td>
         <td><span class="tag-badge">${m.quant}</span></td>
         <td style="font-family: var(--font-mono);">${m.sizeFormatted}</td>
         <td style="color: var(--text-low); font-size: 11.5px;">${m.modifiedAt}</td>
         <td style="text-align: right;">
           <div style="display: inline-flex; gap: 6px;">
             <button class="btn btn-secondary btn-sm btn-sel-model" data-path="${m.path}">Select</button>
-            <button class="btn btn-danger btn-sm btn-del-model" data-name="${m.name}">Delete</button>
+            <button class="btn btn-danger btn-sm btn-del-model" data-name="${m.name}" data-path="${m.path}" data-external="${m.isExternal ? "true" : "false"}">
+              ${m.isExternal ? "Unlink" : "Delete"}
+            </button>
           </div>
         </td>
       `;
@@ -294,7 +299,7 @@ async function loadModels() {
       models.forEach((m) => {
         const opt = document.createElement("option");
         opt.value = m.path;
-        opt.textContent = `${m.name} [${m.quant}] (${m.sizeFormatted})`;
+        opt.textContent = `${m.name} [${m.quant}] (${m.sizeFormatted})${m.isExternal ? " [Linked]" : ""}`;
         defSelect.appendChild(opt);
       });
       if (cur) defSelect.value = cur;
@@ -326,16 +331,19 @@ async function loadModels() {
     $$(".btn-del-model").forEach((b) => {
       b.addEventListener("click", async () => {
         const name = b.getAttribute("data-name");
+        const path = b.getAttribute("data-path") || name;
+        const isExternal = b.getAttribute("data-external") === "true";
         if (!name) return;
-        const confirmed = await showConfirm(
-          "Delete Local Model",
-          `Are you sure you want to permanently delete "${name}" from disk?`,
-          "Delete Model",
-          true
-        );
+
+        const title = isExternal ? "Unlink Model" : "Delete Local Model";
+        const msg = isExternal
+          ? `Remove "${name}" from llama.cpp Manager? (Your original file on disk will NOT be deleted).`
+          : `Are you sure you want to permanently delete "${name}" from disk?`;
+
+        const confirmed = await showConfirm(title, msg, isExternal ? "Unlink Model" : "Delete Model", true);
         if (confirmed) {
-          await LlamaService.deleteModel(name);
-          showToast(`Deleted model ${name}`, "info");
+          await LlamaService.deleteModel(path || name);
+          showToast(isExternal ? `Unlinked model ${name}` : `Deleted model ${name}`, "info");
           loadModels();
         }
       });
@@ -506,14 +514,20 @@ function updateServerUI(st: ServerStatus) {
     if (chatBadge) chatBadge.textContent = st.activeModel ? st.activeModel.split("/").pop()!.split("\\").pop()! : "Active";
   } else {
     pill.className = "status-indicator";
-    pillText.textContent = "Stopped";
+    pillText.textContent = st.errorMsg ? "Crashed / Error" : "Stopped";
     quickBtn.className = "btn btn-primary btn-sm";
     quickBtnText.textContent = "Start Server";
     dashStart.style.display = "inline-flex";
     dashStop.style.display = "none";
-    dashStatus.textContent = "Idle";
-    dashStatus.style.color = "var(--text-high)";
-    dashUptime.textContent = "Not running";
+    if (st.errorMsg) {
+      dashStatus.textContent = "Error";
+      dashStatus.style.color = "var(--status-red)";
+      dashUptime.textContent = st.errorMsg;
+    } else {
+      dashStatus.textContent = "Idle";
+      dashStatus.style.color = "var(--text-high)";
+      dashUptime.textContent = "Not running";
+    }
     const chatBadge = $("#chat-active-model-badge");
     if (chatBadge) chatBadge.textContent = "Offline";
   }
@@ -626,7 +640,8 @@ function setupActions() {
       await LlamaService.startServer(cfg);
       showToast(routerEnabled ? "llama-server started in Router Mode" : `llama-server started with model ${modelPath.split(/[/\\]/).pop()}`, "success", "Server Running");
     } catch (err: any) {
-      showToast(`Launch error: ${err.message || err}`, "error", "Start Failed");
+      showToast(`Launch error: ${err.message || err}`, "error", "Start Failed", 8000);
+      loadLogs();
     }
   };
 

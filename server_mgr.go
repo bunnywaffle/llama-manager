@@ -84,15 +84,17 @@ type ServerStatus struct {
 }
 
 type ServerManager struct {
-	binDir      string
-	cmd         *exec.Cmd
-	cfg         ServerConfig
-	running     bool
-	startTime   time.Time
-	mu          sync.Mutex
-	logBuffer   []string
-	maxLogs     int
-	logCallback func(string)
+	binDir         string
+	cmd            *exec.Cmd
+	cfg            ServerConfig
+	running        bool
+	startTime      time.Time
+	mu             sync.Mutex
+	logBuffer      []string
+	maxLogs        int
+	logCallback    func(string)
+	statusCallback func(ServerStatus)
+	lastError      string
 }
 
 func NewServerManager(binDir string) *ServerManager {
@@ -139,6 +141,12 @@ func (sm *ServerManager) SetLogCallback(cb func(string)) {
 	sm.mu.Unlock()
 }
 
+func (sm *ServerManager) SetStatusCallback(cb func(ServerStatus)) {
+	sm.mu.Lock()
+	sm.statusCallback = cb
+	sm.mu.Unlock()
+}
+
 func (sm *ServerManager) GetConfig() ServerConfig {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
@@ -168,8 +176,12 @@ func (sm *ServerManager) Start(cfg ServerConfig) error {
 		if cfg.ModelPath == "" {
 			return fmt.Errorf("no model file selected")
 		}
-		if _, err := os.Stat(cfg.ModelPath); err != nil {
+		st, err := os.Stat(cfg.ModelPath)
+		if err != nil {
 			return fmt.Errorf("selected model file does not exist: %s", cfg.ModelPath)
+		}
+		if st.Size() < 1024*1024 {
+			return fmt.Errorf("selected model file is invalid or empty (%d bytes): %s", st.Size(), cfg.ModelPath)
 		}
 	} else {
 		if cfg.ModelsDir == "" {
@@ -178,6 +190,7 @@ func (sm *ServerManager) Start(cfg ServerConfig) error {
 	}
 
 	sm.cfg = cfg
+	sm.lastError = ""
 
 	// Build arguments
 	args := []string{
@@ -201,7 +214,9 @@ func (sm *ServerManager) Start(cfg ServerConfig) error {
 		args = append(args, "-t", strconv.Itoa(cfg.Threads))
 	}
 	if cfg.FlashAttention {
-		args = append(args, "-fa")
+		args = append(args, "-fa", "on")
+	} else {
+		args = append(args, "-fa", "off")
 	}
 
 	// Sampling arguments
@@ -338,20 +353,51 @@ func (sm *ServerManager) Start(cfg ServerConfig) error {
 	go sm.streamLogs(stdoutPipe)
 	go sm.streamLogs(stderrPipe)
 
+	exitChan := make(chan error, 1)
+
 	// Wait in background to track exit
 	go func() {
 		waitErr := cmd.Wait()
 		sm.mu.Lock()
 		sm.running = false
-		sm.mu.Unlock()
 		if waitErr != nil {
+			sm.lastError = fmt.Sprintf("Process exited: %v", waitErr)
+			sm.mu.Unlock()
 			sm.addLog(fmt.Sprintf("[System] llama-server process (PID %d) exited: %v", cmd.Process.Pid, waitErr))
 		} else {
+			sm.lastError = ""
+			sm.mu.Unlock()
 			sm.addLog(fmt.Sprintf("[System] llama-server process (PID %d) stopped cleanly", cmd.Process.Pid))
+		}
+
+		select {
+		case exitChan <- waitErr:
+		default:
+		}
+
+		sm.mu.Lock()
+		cb := sm.statusCallback
+		st := sm.getStatusLocked()
+		sm.mu.Unlock()
+		if cb != nil {
+			cb(st)
 		}
 	}()
 
 	sm.addLog(fmt.Sprintf("[System] Started llama-server with model %s on %s:%d", filepath.Base(cfg.ModelPath), cfg.Host, cfg.Port))
+
+	// Release mutex temporarily while awaiting initial health confirmation
+	sm.mu.Unlock()
+	select {
+	case err := <-exitChan:
+		sm.mu.Lock()
+		sm.running = false
+		snippet := sm.getLastErrorSnippetLocked()
+		return fmt.Errorf("llama-server failed to start (%v). Logs: %s", err, snippet)
+	case <-time.After(600 * time.Millisecond):
+		sm.mu.Lock()
+	}
+
 	return nil
 }
 
@@ -376,26 +422,52 @@ func (sm *ServerManager) Stop() error {
 	}
 
 	sm.running = false
+	sm.lastError = ""
 	sm.addLog(fmt.Sprintf("[System] Sent stop signal to llama-server (PID %d)", pid))
+
+	cb := sm.statusCallback
+	st := sm.getStatusLocked()
+	if cb != nil {
+		go cb(st)
+	}
+
 	return nil
+}
+
+func (sm *ServerManager) getStatusLocked() ServerStatus {
+	status := ServerStatus{
+		Running:     sm.running,
+		Host:        sm.cfg.Host,
+		Port:        sm.cfg.Port,
+		ActiveModel: filepath.Base(sm.cfg.ModelPath),
+		ErrorMsg:    sm.lastError,
+	}
+
+	if sm.running && sm.cmd != nil && sm.cmd.Process != nil {
+		status.PID = sm.cmd.Process.Pid
+		status.UptimeSeconds = int64(time.Since(sm.startTime).Seconds())
+	}
+
+	return status
+}
+
+func (sm *ServerManager) getLastErrorSnippetLocked() string {
+	if len(sm.logBuffer) == 0 {
+		return ""
+	}
+	start := 0
+	if len(sm.logBuffer) > 4 {
+		start = len(sm.logBuffer) - 4
+	}
+	return strings.Join(sm.logBuffer[start:], " | ")
 }
 
 func (sm *ServerManager) GetStatus() ServerStatus {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
-	status := ServerStatus{
-		Running:     sm.running,
-		Host:        sm.cfg.Host,
-		Port:        sm.cfg.Port,
-		ActiveModel: filepath.Base(sm.cfg.ModelPath),
-	}
-
+	status := sm.getStatusLocked()
 	if sm.running && sm.cmd != nil && sm.cmd.Process != nil {
-		status.PID = sm.cmd.Process.Pid
-		status.UptimeSeconds = int64(time.Since(sm.startTime).Seconds())
-
-		// Query health/props asynchronously or with quick timeout
 		go sm.queryServerMetrics()
 	}
 

@@ -20,6 +20,7 @@ type ModelInfo struct {
 	SizeFormatted string `json:"sizeFormatted"`
 	Quant         string `json:"quant"`
 	ModifiedAt    string `json:"modifiedAt"`
+	IsExternal    bool   `json:"isExternal"`
 }
 
 // HuggingFaceFile represents a GGUF model file in a Hugging Face repo.
@@ -32,16 +33,48 @@ type HuggingFaceFile struct {
 }
 
 type ModelManager struct {
-	modelsDir  string
-	mu         sync.Mutex
-	isBusy     bool
-	cancelChan chan struct{}
+	modelsDir       string
+	appDataDir      string
+	registeredPaths []string
+	mu              sync.Mutex
+	isBusy          bool
+	cancelChan      chan struct{}
 }
 
-func NewModelManager(modelsDir string) *ModelManager {
+func NewModelManager(modelsDir, appDataDir string) *ModelManager {
 	_ = os.MkdirAll(modelsDir, 0755)
-	return &ModelManager{
-		modelsDir: modelsDir,
+	mm := &ModelManager{
+		modelsDir:  modelsDir,
+		appDataDir: appDataDir,
+	}
+	mm.loadRegisteredModels()
+	return mm
+}
+
+func (mm *ModelManager) getRegistryPath() string {
+	if mm.appDataDir != "" {
+		return filepath.Join(mm.appDataDir, "registered_models.json")
+	}
+	return filepath.Join(mm.modelsDir, "registered_models.json")
+}
+
+func (mm *ModelManager) loadRegisteredModels() {
+	p := mm.getRegistryPath()
+	data, err := os.ReadFile(p)
+	if err != nil {
+		return
+	}
+	var paths []string
+	if err := json.Unmarshal(data, &paths); err == nil {
+		mm.registeredPaths = paths
+	}
+}
+
+func (mm *ModelManager) saveRegisteredModels() {
+	p := mm.getRegistryPath()
+	data, err := json.MarshalIndent(mm.registeredPaths, "", "  ")
+	if err == nil {
+		_ = os.WriteFile(p, data, 0644)
 	}
 }
 
@@ -64,44 +97,108 @@ func (mm *ModelManager) SetModelsDir(dir string) error {
 func (mm *ModelManager) ListModels() ([]ModelInfo, error) {
 	mm.mu.Lock()
 	dir := mm.modelsDir
+	registered := make([]string, len(mm.registeredPaths))
+	copy(registered, mm.registeredPaths)
 	mm.mu.Unlock()
 
+	var models []ModelInfo
+	seenPaths := make(map[string]bool)
+
+	// 1. Scan default models directory
 	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil, err
+	if err == nil {
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.HasSuffix(strings.ToLower(entry.Name()), ".gguf") {
+				continue
+			}
+
+			info, err := entry.Info()
+			if err != nil || info.Size() < 1024*1024 {
+				continue // Skip corrupt or 0-byte files
+			}
+
+			p := filepath.Join(dir, entry.Name())
+			seenPaths[filepath.Clean(p)] = true
+
+			models = append(models, ModelInfo{
+				Name:          entry.Name(),
+				Path:          p,
+				SizeBytes:     info.Size(),
+				SizeFormatted: formatBytes(info.Size()),
+				Quant:         detectQuant(entry.Name()),
+				ModifiedAt:    info.ModTime().Format("2006-01-02 15:04"),
+				IsExternal:    false,
+			})
+		}
 	}
 
-	var models []ModelInfo
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(strings.ToLower(entry.Name()), ".gguf") {
+	// 2. Scan registered external model files
+	var validRegistered []string
+	changed := false
+
+	for _, p := range registered {
+		cleanP := filepath.Clean(p)
+		if seenPaths[cleanP] {
+			validRegistered = append(validRegistered, p)
 			continue
 		}
 
-		info, err := entry.Info()
-		if err != nil {
+		info, err := os.Stat(p)
+		if err != nil || info.Size() < 1024*1024 {
+			changed = true
 			continue
 		}
+
+		validRegistered = append(validRegistered, p)
+		seenPaths[cleanP] = true
 
 		models = append(models, ModelInfo{
-			Name:          entry.Name(),
-			Path:          filepath.Join(dir, entry.Name()),
+			Name:          filepath.Base(p),
+			Path:          p,
 			SizeBytes:     info.Size(),
 			SizeFormatted: formatBytes(info.Size()),
-			Quant:         detectQuant(entry.Name()),
+			Quant:         detectQuant(filepath.Base(p)),
 			ModifiedAt:    info.ModTime().Format("2006-01-02 15:04"),
+			IsExternal:    true,
 		})
+	}
+
+	if changed {
+		mm.mu.Lock()
+		mm.registeredPaths = validRegistered
+		mm.saveRegisteredModels()
+		mm.mu.Unlock()
 	}
 
 	return models, nil
 }
 
-func (mm *ModelManager) DeleteModel(filename string) error {
+func (mm *ModelManager) DeleteModel(identifier string) error {
 	mm.mu.Lock()
-	dir := mm.modelsDir
-	mm.mu.Unlock()
+	defer mm.mu.Unlock()
 
-	cleanName := filepath.Base(filename)
-	target := filepath.Join(dir, cleanName)
+	cleanIdent := filepath.Clean(identifier)
+	baseIdent := filepath.Base(identifier)
+
+	// Check if this model is in registeredPaths
+	var newRegistered []string
+	removedFromRegistry := false
+	for _, p := range mm.registeredPaths {
+		if filepath.Clean(p) == cleanIdent || filepath.Base(p) == baseIdent {
+			removedFromRegistry = true
+		} else {
+			newRegistered = append(newRegistered, p)
+		}
+	}
+
+	if removedFromRegistry {
+		mm.registeredPaths = newRegistered
+		mm.saveRegisteredModels()
+		return nil
+	}
+
+	// Otherwise, delete from modelsDir
+	target := filepath.Join(mm.modelsDir, baseIdent)
 	return os.Remove(target)
 }
 
@@ -115,49 +212,69 @@ func (mm *ModelManager) ImportModel(sourcePath string) (ModelInfo, error) {
 	if err != nil {
 		return ModelInfo{}, fmt.Errorf("cannot read source file: %w", err)
 	}
+	if srcInfo.Size() < 1024*1024 {
+		return ModelInfo{}, fmt.Errorf("selected model file is empty or invalid (%d bytes): %s", srcInfo.Size(), sourcePath)
+	}
 
 	mm.mu.Lock()
 	dir := mm.modelsDir
 	mm.mu.Unlock()
 
+	cleanSource := filepath.Clean(sourcePath)
 	destName := filepath.Base(sourcePath)
 	destPath := filepath.Join(dir, destName)
+	cleanDest := filepath.Clean(destPath)
 
-	if filepath.Clean(sourcePath) != filepath.Clean(destPath) {
-		_ = os.Remove(destPath)
-		// Try hard link first (instant, 0 disk space on same volume)
-		if err := os.Link(sourcePath, destPath); err != nil {
-			// Fallback to copy
-			in, err := os.Open(sourcePath)
-			if err != nil {
-				return ModelInfo{}, err
-			}
-			defer in.Close()
+	// Case 1: Already inside modelsDir
+	if cleanSource == cleanDest {
+		return ModelInfo{
+			Name:          destName,
+			Path:          cleanDest,
+			SizeBytes:     srcInfo.Size(),
+			SizeFormatted: formatBytes(srcInfo.Size()),
+			Quant:         detectQuant(destName),
+			ModifiedAt:    srcInfo.ModTime().Format("2006-01-02 15:04"),
+			IsExternal:    false,
+		}, nil
+	}
 
-			out, err := os.Create(destPath)
-			if err != nil {
-				return ModelInfo{}, err
-			}
-			defer out.Close()
+	// Case 2: Try hardlink (instant on same volume)
+	_ = os.Remove(destPath)
+	if err := os.Link(cleanSource, destPath); err == nil {
+		return ModelInfo{
+			Name:          destName,
+			Path:          destPath,
+			SizeBytes:     srcInfo.Size(),
+			SizeFormatted: formatBytes(srcInfo.Size()),
+			Quant:         detectQuant(destName),
+			ModifiedAt:    srcInfo.ModTime().Format("2006-01-02 15:04"),
+			IsExternal:    false,
+		}, nil
+	}
 
-			if _, err := io.Copy(out, in); err != nil {
-				return ModelInfo{}, err
-			}
+	// Case 3: Register in-place (instant, 0 disk space across volumes)
+	mm.mu.Lock()
+	alreadyRegistered := false
+	for _, p := range mm.registeredPaths {
+		if filepath.Clean(p) == cleanSource {
+			alreadyRegistered = true
+			break
 		}
 	}
-
-	info, _ := os.Stat(destPath)
-	if info == nil {
-		info = srcInfo
+	if !alreadyRegistered {
+		mm.registeredPaths = append(mm.registeredPaths, cleanSource)
+		mm.saveRegisteredModels()
 	}
+	mm.mu.Unlock()
 
 	return ModelInfo{
 		Name:          destName,
-		Path:          destPath,
-		SizeBytes:     info.Size(),
-		SizeFormatted: formatBytes(info.Size()),
+		Path:          cleanSource,
+		SizeBytes:     srcInfo.Size(),
+		SizeFormatted: formatBytes(srcInfo.Size()),
 		Quant:         detectQuant(destName),
-		ModifiedAt:    info.ModTime().Format("2006-01-02 15:04"),
+		ModifiedAt:    srcInfo.ModTime().Format("2006-01-02 15:04"),
+		IsExternal:    true,
 	}, nil
 }
 
