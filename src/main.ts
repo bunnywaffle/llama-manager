@@ -38,6 +38,7 @@ import {
   SlidersHorizontal,
   Boxes,
   Settings2,
+  Brain,
 } from "lucide";
 import {
   LlamaService,
@@ -111,6 +112,7 @@ function renderIcons() {
       SlidersHorizontal,
       Boxes,
       Settings2,
+      Brain,
     },
   });
 }
@@ -1659,6 +1661,23 @@ function setupChat() {
     }
   });
 
+  // Helper to extract <think> / <thought> blocks
+  function parseReasoning(content: string): { reasoning?: string; answer: string } {
+    const thinkRegex = /<(think|thought)>([\s\S]*?)(?:<\/\1>|$)/i;
+    const match = content.match(thinkRegex);
+    if (!match) {
+      return { answer: content };
+    }
+
+    const reasoning = match && match[2] ? match[2].trim() : "";
+    const answer = content.replace(/<(think|thought)>[\s\S]*?(?:<\/\1>|$)/gi, "").trim();
+
+    return {
+      reasoning: reasoning.length > 0 ? reasoning : undefined,
+      answer,
+    };
+  }
+
   // Render stage (chat history tree path)
   function renderStage() {
     sessionTitle.textContent = currentSession.title || "Chat Playground";
@@ -1697,7 +1716,49 @@ function setupChat() {
       // Content bubble
       const bubble = document.createElement("div");
       bubble.className = `chat-entry ${node.role}`;
-      bubble.textContent = node.content;
+
+      if (node.role === "assistant") {
+        const parsed = parseReasoning(node.content);
+        if (parsed.reasoning) {
+          const details = document.createElement("details");
+          details.className = "reasoning-accordion";
+
+          const summary = document.createElement("summary");
+          summary.className = "reasoning-summary";
+          summary.innerHTML = `
+            <div class="reasoning-summary-left">
+              <i data-lucide="brain"></i>
+              <span>Thought Process</span>
+            </div>
+            <i data-lucide="chevron-right" class="reasoning-chevron"></i>
+          `;
+
+          const body = document.createElement("div");
+          body.className = "reasoning-body";
+          body.textContent = parsed.reasoning;
+
+          details.appendChild(summary);
+          details.appendChild(body);
+          bubble.appendChild(details);
+
+          if (parsed.answer) {
+            const answerDiv = document.createElement("div");
+            answerDiv.className = "chat-answer-body";
+            answerDiv.textContent = parsed.answer;
+            bubble.appendChild(answerDiv);
+          } else {
+            const emptyDiv = document.createElement("div");
+            emptyDiv.className = "chat-answer-body chat-answer-empty";
+            emptyDiv.textContent = "(Reasoning complete)";
+            bubble.appendChild(emptyDiv);
+          }
+        } else {
+          bubble.textContent = node.content;
+        }
+      } else {
+        bubble.textContent = node.content;
+      }
+
       wrapper.appendChild(bubble);
 
       // Meta bar with sibling pagination & action buttons

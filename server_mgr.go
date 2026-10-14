@@ -599,7 +599,9 @@ func (sm *ServerManager) SendChatMessageWithModel(model string, messages []ChatM
 	var chatResp struct {
 		Choices []struct {
 			Message struct {
-				Content string `json:"content"`
+				Content          string `json:"content"`
+				ReasoningContent string `json:"reasoning_content"`
+				Reasoning        string `json:"reasoning"`
 			} `json:"message"`
 		} `json:"choices"`
 	}
@@ -609,7 +611,23 @@ func (sm *ServerManager) SendChatMessageWithModel(model string, messages []ChatM
 	}
 
 	if len(chatResp.Choices) > 0 {
-		return chatResp.Choices[0].Message.Content, nil
+		msg := chatResp.Choices[0].Message
+		res := msg.Content
+		reasoning := strings.TrimSpace(msg.ReasoningContent)
+		if reasoning == "" {
+			reasoning = strings.TrimSpace(msg.Reasoning)
+		}
+
+		if reasoning != "" {
+			if !strings.Contains(res, "<think>") && !strings.Contains(res, "<thought>") {
+				if res == "" {
+					res = fmt.Sprintf("<think>\n%s\n</think>", reasoning)
+				} else {
+					res = fmt.Sprintf("<think>\n%s\n</think>\n%s", reasoning, res)
+				}
+			}
+		}
+		return res, nil
 	}
 
 	return "", fmt.Errorf("no response choices returned")
