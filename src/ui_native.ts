@@ -164,6 +164,9 @@ export function initNativeContextMenu() {
     const inputElem = isInput ? (target as HTMLInputElement | HTMLTextAreaElement) : null;
     const isLogArea = target && (target.id === 'terminal-logs' || target.closest('#terminal-logs'));
 
+    const isMac = typeof navigator !== 'undefined' && (/Mac|iPhone|iPod|iPad/i.test(navigator.userAgent) || /Mac/i.test(navigator.platform));
+    const mod = isMac ? '⌘' : 'Ctrl+';
+
     const items: (MenuItem | 'separator')[] = [];
 
     if (isInput && inputElem) {
@@ -172,7 +175,7 @@ export function initNativeContextMenu() {
 
       items.push({
         label: 'Cut',
-        shortcut: 'Ctrl+X',
+        shortcut: `${mod}X`,
         disabled: !hasSelection || isReadOnly,
         action: () => {
           document.execCommand('cut');
@@ -180,7 +183,7 @@ export function initNativeContextMenu() {
       });
       items.push({
         label: 'Copy',
-        shortcut: 'Ctrl+C',
+        shortcut: `${mod}C`,
         disabled: !hasSelection,
         action: () => {
           document.execCommand('copy');
@@ -188,7 +191,7 @@ export function initNativeContextMenu() {
       });
       items.push({
         label: 'Paste',
-        shortcut: 'Ctrl+V',
+        shortcut: `${mod}V`,
         disabled: isReadOnly,
         action: async () => {
           try {
@@ -206,7 +209,7 @@ export function initNativeContextMenu() {
       items.push('separator');
       items.push({
         label: 'Select All',
-        shortcut: 'Ctrl+A',
+        shortcut: `${mod}A`,
         action: () => {
           inputElem.select();
         }
@@ -214,7 +217,7 @@ export function initNativeContextMenu() {
     } else if (isLogArea) {
       items.push({
         label: 'Copy Selected',
-        shortcut: 'Ctrl+C',
+        shortcut: `${mod}C`,
         disabled: !selectedText,
         action: () => {
           if (selectedText) {
@@ -244,7 +247,7 @@ export function initNativeContextMenu() {
     } else if (selectedText) {
       items.push({
         label: 'Copy',
-        shortcut: 'Ctrl+C',
+        shortcut: `${mod}C`,
         action: () => {
           navigator.clipboard.writeText(selectedText);
           showToast('Copied to clipboard', 'info');
@@ -253,7 +256,7 @@ export function initNativeContextMenu() {
       items.push('separator');
       items.push({
         label: 'Select All',
-        shortcut: 'Ctrl+A',
+        shortcut: `${mod}A`,
         action: () => {
           document.execCommand('selectAll');
         }
@@ -262,7 +265,7 @@ export function initNativeContextMenu() {
       // General app menu
       items.push({
         label: 'Select All',
-        shortcut: 'Ctrl+A',
+        shortcut: `${mod}A`,
         action: () => {
           document.execCommand('selectAll');
         }

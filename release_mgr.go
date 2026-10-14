@@ -279,18 +279,27 @@ func (rm *ReleaseManager) DownloadAndInstall(tag, variant string, onProgress fun
 		}
 
 		switch variant {
+		case "metal":
+			if strings.Contains(lower, "macos") {
+				primaryAsset = a
+			}
 		case "cuda":
 			if strings.Contains(lower, "cuda") || strings.Contains(lower, "cu12") || strings.Contains(lower, "cu11") {
-				if primaryAsset == nil || strings.Contains(lower, "12.4") {
+				if primaryAsset == nil || strings.Contains(lower, "12.4") || strings.Contains(lower, "12") {
 					primaryAsset = a
 				}
+			}
+		case "rocm":
+			if strings.Contains(lower, "rocm") {
+				primaryAsset = a
 			}
 		case "vulkan":
 			if strings.Contains(lower, "vulkan") {
 				primaryAsset = a
 			}
 		case "cpu":
-			if strings.Contains(lower, "cpu") || strings.Contains(lower, "avx2") {
+			if strings.Contains(lower, "cpu") || strings.Contains(lower, "avx2") ||
+				(!strings.Contains(lower, "cuda") && !strings.Contains(lower, "vulkan") && !strings.Contains(lower, "rocm") && !strings.Contains(lower, "sycl")) {
 				primaryAsset = a
 			}
 		}

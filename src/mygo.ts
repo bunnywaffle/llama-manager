@@ -41,10 +41,14 @@ export interface DiagnosticItem {
   fixAction?: string;
 }
 
-/** HardwareInfo details system resources and detected GPU accelerator. */
+/** HardwareInfo details system resources, detected GPU accelerators, and available backends across OSes. */
 export interface HardwareInfo {
+  /** "windows", "darwin", "linux" */
   os: string;
+  /** "x64", "arm64" */
   arch: string;
+  /** e.g. "Windows 11 (x64)", "macOS (Apple Silicon)" */
+  platformDisplay: string;
   cpuModel: string;
   cores: number;
   threads: number;
@@ -52,7 +56,11 @@ export interface HardwareInfo {
   vram: string;
   hasNvidia: boolean;
   hasVulkan: boolean;
+  hasMetal: boolean;
+  hasRocm: boolean;
+  /** "metal", "cuda", "vulkan", "rocm", "cpu" */
   recommendedBackend: string;
+  availableBackends: string[];
 }
 
 /** HuggingFaceFile represents a GGUF model file in a Hugging Face repo. */
@@ -243,7 +251,7 @@ export const LlamaService = {
   listModels(): Promise<ModelInfo[]> {
     return call("LlamaService.ListModels");
   },
-  /** OpenFolderInExplorer opens the specified directory in Windows File Explorer. */
+  /** OpenFolderInExplorer opens the specified directory in the host OS's native file manager. */
   openFolderInExplorer(dir: string): Promise<void> {
     return call("LlamaService.OpenFolderInExplorer", dir);
   },

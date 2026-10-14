@@ -51,12 +51,16 @@
 
         <div class="sidebar-footer">
           <div class="hw-row">
+            <span class="hw-label"><i data-lucide="layout"></i> Platform</span>
+            <span class="hw-value" id="hw-platform-tag">Detecting...</span>
+          </div>
+          <div class="hw-row">
             <span class="hw-label"><i data-lucide="hard-drive"></i> GPU</span>
             <span class="hw-value" id="hw-gpu-name">Detecting...</span>
           </div>
           <div class="hw-row">
             <span class="hw-label"><i data-lucide="cpu"></i> Backend</span>
-            <span class="hw-value" id="hw-backend-tag">CUDA 12.4</span>
+            <span class="hw-value" id="hw-backend-tag">Auto</span>
           </div>
           <div class="hw-row">
             <span class="hw-label">VRAM</span>
@@ -753,14 +757,36 @@
               </div>
 
               <div class="backend-card-grid">
+                <label class="backend-radio-card" id="card-backend-metal">
+                  <input type="radio" name="opt-backend" value="metal" id="radio-backend-metal" />
+                  <div class="backend-card-content">
+                    <div class="backend-card-header">
+                      <span class="backend-card-title">Metal (Apple Silicon)</span>
+                      <span class="tag-badge accent">macOS Metal</span>
+                    </div>
+                    <div class="backend-card-desc">Native Apple Silicon GPU & unified memory acceleration for M1, M2, M3, M4 Macs.</div>
+                  </div>
+                </label>
+
                 <label class="backend-radio-card" id="card-backend-cuda">
                   <input type="radio" name="opt-backend" value="cuda" id="radio-backend-cuda" checked />
                   <div class="backend-card-content">
                     <div class="backend-card-header">
-                      <span class="backend-card-title">CUDA 12.4 (NVIDIA)</span>
+                      <span class="backend-card-title">CUDA (NVIDIA)</span>
                       <span class="tag-badge accent">NVIDIA GPU</span>
                     </div>
                     <div class="backend-card-desc">Offloads tensor operations to NVIDIA CUDA cores. Recommended for GeForce RTX / GTX GPUs.</div>
+                  </div>
+                </label>
+
+                <label class="backend-radio-card" id="card-backend-rocm">
+                  <input type="radio" name="opt-backend" value="rocm" id="radio-backend-rocm" />
+                  <div class="backend-card-content">
+                    <div class="backend-card-header">
+                      <span class="backend-card-title">ROCm (AMD HIP)</span>
+                      <span class="tag-badge">AMD GPU</span>
+                    </div>
+                    <div class="backend-card-desc">Dedicated AMD Radeon ROCm compute stack for Linux and compatible hardware.</div>
                   </div>
                 </label>
 
@@ -768,10 +794,10 @@
                   <input type="radio" name="opt-backend" value="vulkan" id="radio-backend-vulkan" />
                   <div class="backend-card-content">
                     <div class="backend-card-header">
-                      <span class="backend-card-title">Vulkan (AMD Radeon & Universal)</span>
-                      <span class="tag-badge">AMD / Intel / GPU</span>
+                      <span class="backend-card-title">Vulkan (AMD / Universal)</span>
+                      <span class="tag-badge">Universal GPU</span>
                     </div>
-                    <div class="backend-card-desc">Universal shader-based GPU acceleration for AMD Radeon (RX 6000/7000), Intel Arc, or systems without CUDA drivers.</div>
+                    <div class="backend-card-desc">Universal shader-based GPU acceleration for AMD Radeon, Intel Arc, or systems without proprietary drivers.</div>
                   </div>
                 </label>
 
@@ -779,10 +805,10 @@
                   <input type="radio" name="opt-backend" value="cpu" id="radio-backend-cpu" />
                   <div class="backend-card-content">
                     <div class="backend-card-header">
-                      <span class="backend-card-title">CPU (Standard AVX2)</span>
-                      <span class="tag-badge">x86_64 CPU</span>
+                      <span class="backend-card-title">CPU (Universal)</span>
+                      <span class="tag-badge">x86_64 / ARM64</span>
                     </div>
-                    <div class="backend-card-desc">Pure CPU inference without GPU acceleration. Highly compatible and works on all x86_64 machines.</div>
+                    <div class="backend-card-desc">Pure CPU inference with AVX2 or ARM NEON vector instructions. Highly portable across all hardware.</div>
                   </div>
                 </label>
               </div>

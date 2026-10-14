@@ -182,16 +182,32 @@ function setupSliders() {
 async function loadHardware() {
   try {
     const hw = await LlamaService.getHardware();
+    const platEl = $("#hw-platform-tag");
+    if (platEl) platEl.textContent = hw.platformDisplay || `${hw.os} (${hw.arch})`;
+
     $("#hw-gpu-name").textContent = hw.gpuName || "CPU Only";
-    $("#hw-backend-tag").textContent = hw.recommendedBackend.toUpperCase();
+    $("#hw-backend-tag").textContent = (hw.recommendedBackend || "cpu").toUpperCase();
     $("#hw-vram").textContent = hw.vram || "--";
-    $("#dash-backend-val").textContent = `${hw.recommendedBackend.toUpperCase()} (${hw.gpuName || "CPU"})`;
+    $("#dash-backend-val").textContent = `${(hw.recommendedBackend || "cpu").toUpperCase()} (${hw.gpuName || "CPU"})`;
 
     if (hw.threads) {
       const rec = Math.max(1, Math.min(16, Math.floor(hw.threads / 2)));
       $<HTMLInputElement>("#cfg-threads").value = String(rec);
       $("#cfg-threads-val").textContent = String(rec);
     }
+
+    // Dynamic backend selection cards based on detected OS
+    const isMac = hw.os === "darwin";
+    const isLinux = hw.os === "linux";
+    const cardMetal = document.getElementById("card-backend-metal");
+    const cardCuda = document.getElementById("card-backend-cuda");
+    const cardRocm = document.getElementById("card-backend-rocm");
+    const cardVulkan = document.getElementById("card-backend-vulkan");
+
+    if (cardMetal) cardMetal.style.display = isMac ? "flex" : "none";
+    if (cardCuda) cardCuda.style.display = isMac ? "none" : "flex";
+    if (cardRocm) cardRocm.style.display = isLinux || hw.hasRocm ? "flex" : "none";
+    if (cardVulkan) cardVulkan.style.display = isMac ? "none" : "flex";
   } catch (err) {
     console.error("Hardware detection error:", err);
   }
@@ -735,12 +751,40 @@ async function loadReleases() {
   tbody.innerHTML = `<tr><td colspan="5" style="text-align: center; color: var(--text-low); padding: 18px;">Checking GitHub releases...</td></tr>`;
 
   try {
-    const releases = await LlamaService.checkReleases();
+    const [releases, hw] = await Promise.all([
+      LlamaService.checkReleases(),
+      LlamaService.getHardware(),
+    ]);
     tbody.innerHTML = "";
 
     if (!releases || releases.length === 0) {
-      tbody.innerHTML = `<tr><td colspan="5" style="text-align: center; color: var(--text-low);">No releases returned.</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="5" style="text-align: center; color: var(--text-low);">No releases returned for ${hw.os} (${hw.arch}).</td></tr>`;
       return;
+    }
+
+    const isMac = hw.os === "darwin";
+    const isLinux = hw.os === "linux";
+
+    let variantOptionsHtml = "";
+    if (isMac) {
+      variantOptionsHtml = `
+        <option value="metal" selected>Metal (Apple Silicon / Mac)</option>
+        <option value="cpu">CPU (Standard)</option>
+      `;
+    } else if (isLinux) {
+      variantOptionsHtml = `
+        <option value="cuda" ${hw.recommendedBackend === "cuda" ? "selected" : ""}>CUDA (NVIDIA)</option>
+        <option value="rocm" ${hw.recommendedBackend === "rocm" ? "selected" : ""}>ROCm (AMD)</option>
+        <option value="vulkan" ${hw.recommendedBackend === "vulkan" ? "selected" : ""}>Vulkan (Universal)</option>
+        <option value="cpu">CPU (Standard)</option>
+      `;
+    } else {
+      // Windows
+      variantOptionsHtml = `
+        <option value="cuda" ${hw.recommendedBackend === "cuda" ? "selected" : ""}>CUDA 12.4 (NVIDIA)</option>
+        <option value="vulkan" ${hw.recommendedBackend === "vulkan" ? "selected" : ""}>Vulkan (AMD / Universal)</option>
+        <option value="cpu">CPU (Standard)</option>
+      `;
     }
 
     releases.forEach((r) => {
@@ -750,10 +794,8 @@ async function loadReleases() {
         <td style="color: var(--text-medium); font-size: 12px;">${r.name || r.tag}</td>
         <td style="color: var(--text-low); font-size: 11.5px;">${new Date(r.publishedAt).toLocaleDateString()}</td>
         <td>
-          <select class="form-select" style="width: 150px; padding: 4px 8px; font-size: 11.5px;" id="rel-var-${r.tag}">
-            <option value="cuda" selected>CUDA 12.4 (NVIDIA)</option>
-            <option value="vulkan">Vulkan (Universal)</option>
-            <option value="cpu">CPU (Standard)</option>
+          <select class="form-select" style="width: 170px; padding: 4px 8px; font-size: 11.5px;" id="rel-var-${r.tag}">
+            ${variantOptionsHtml}
           </select>
         </td>
         <td style="text-align: right;">

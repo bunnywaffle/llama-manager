@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -300,12 +301,13 @@ func (sm *ServerManager) Start(cfg ServerConfig) error {
 	cmd := prepareCmd(exec.Command(serverExe, args...))
 	cmd.Dir = sm.binDir
 
-	// Prepend binDir to PATH so Windows dynamic loader reliably finds cudart, cublas, and ggml DLLs
+	// Prepend binDir to PATH so dynamic loaders reliably find cudart, cublas, and ggml libraries
 	env := os.Environ()
 	pathUpdated := false
+	sep := string(os.PathListSeparator)
 	for i, e := range env {
 		if strings.HasPrefix(strings.ToUpper(e), "PATH=") {
-			env[i] = fmt.Sprintf("PATH=%s;%s", sm.binDir, e[5:])
+			env[i] = fmt.Sprintf("PATH=%s%s%s", sm.binDir, sep, e[5:])
 			pathUpdated = true
 			break
 		}
@@ -362,9 +364,16 @@ func (sm *ServerManager) Stop() error {
 	}
 
 	pid := sm.cmd.Process.Pid
-	// On Windows, use taskkill to kill process tree cleanly without flashing console
-	killCmd := prepareCmd(exec.Command("taskkill", "/PID", strconv.Itoa(pid), "/T", "/F"))
-	_ = killCmd.Run()
+	if runtime.GOOS == "windows" {
+		// On Windows, use taskkill to kill process tree cleanly without flashing console
+		killCmd := prepareCmd(exec.Command("taskkill", "/PID", strconv.Itoa(pid), "/T", "/F"))
+		_ = killCmd.Run()
+	} else {
+		// On Unix (Linux / macOS), gracefully signal then terminate
+		_ = sm.cmd.Process.Signal(os.Interrupt)
+		time.Sleep(100 * time.Millisecond)
+		_ = sm.cmd.Process.Kill()
+	}
 
 	sm.running = false
 	sm.addLog(fmt.Sprintf("[System] Sent stop signal to llama-server (PID %d)", pid))

@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sync"
 
 	"github.com/egoist/mygo"
@@ -154,13 +155,21 @@ func (s *LlamaService) SelectFolderDialog(title string) (string, error) {
 	return paths[0], nil
 }
 
-// OpenFolderInExplorer opens the specified directory in Windows File Explorer.
+// OpenFolderInExplorer opens the specified directory in the host OS's native file manager.
 func (s *LlamaService) OpenFolderInExplorer(dir string) error {
 	if dir == "" {
 		dir = s.appDataDir
 	}
 	_ = os.MkdirAll(dir, 0755)
-	return exec.Command("explorer.exe", dir).Start()
+
+	switch runtime.GOOS {
+	case "windows":
+		return prepareCmd(exec.Command("explorer.exe", dir)).Start()
+	case "darwin":
+		return prepareCmd(exec.Command("open", dir)).Start()
+	default:
+		return prepareCmd(exec.Command("xdg-open", dir)).Start()
+	}
 }
 
 // SwitchBackend downloads or switches the active backend variant (cuda, vulkan, cpu).
