@@ -1,0 +1,267 @@
+package main
+
+import (
+	"context"
+	"fmt"
+	"net"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"time"
+)
+
+type DiagnosticItem struct {
+	Category  string `json:"category"`  // "executable", "runtime_dlls", "smoke_test", "port", "storage", "gpu"
+	Title     string `json:"title"`
+	Status    string `json:"status"`    // "ok", "warning", "error"
+	Message   string `json:"message"`
+	FixAction string `json:"fixAction,omitempty"` // "reinstall", "kill_zombies", "download_cudart"
+}
+
+type TroubleshootReport struct {
+	Healthy     bool             `json:"healthy"`
+	Backend     string           `json:"backend"`
+	Version     string           `json:"version"`
+	IssuesCount int              `json:"issuesCount"`
+	Items       []DiagnosticItem `json:"items"`
+}
+
+// RunDiagnostics executes a full health scan of the backend binaries, DLLs, port, and permissions.
+func RunDiagnostics(binDir, modelsDir, variant string, port int, hw HardwareInfo) TroubleshootReport {
+	if variant == "" {
+		variant = "cuda"
+	}
+
+	report := TroubleshootReport{
+		Healthy: true,
+		Backend: variant,
+		Items:   make([]DiagnosticItem, 0),
+	}
+
+	// Read version
+	versionFile := filepath.Join(binDir, "version.txt")
+	if data, err := os.ReadFile(versionFile); err == nil {
+		lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+		if len(lines) > 0 {
+			report.Version = lines[0]
+		}
+	} else {
+		report.Version = "Unknown"
+	}
+
+	// 1. Executable Integrity Check
+	exePath := filepath.Join(binDir, "llama-server.exe")
+	info, err := os.Stat(exePath)
+	if err != nil {
+		report.Items = append(report.Items, DiagnosticItem{
+			Category:  "executable",
+			Title:     "llama-server.exe Executable",
+			Status:    "error",
+			Message:   fmt.Sprintf("Binary not found at %s. Please install the backend.", exePath),
+			FixAction: "reinstall",
+		})
+	} else if info.Size() < 1024*1024 {
+		report.Items = append(report.Items, DiagnosticItem{
+			Category:  "executable",
+			Title:     "llama-server.exe Executable",
+			Status:    "error",
+			Message:   fmt.Sprintf("Binary file size is only %d bytes (corrupted or truncated).", info.Size()),
+			FixAction: "reinstall",
+		})
+	} else {
+		report.Items = append(report.Items, DiagnosticItem{
+			Category: "executable",
+			Title:    "llama-server.exe Executable",
+			Status:   "ok",
+			Message:  fmt.Sprintf("Verified binary exists (%d MB).", info.Size()/(1024*1024)),
+		})
+	}
+
+	// 2. Runtime DLL Dependency Check
+	switch strings.ToLower(variant) {
+	case "cuda":
+		cudaFiles, _ := filepath.Glob(filepath.Join(binDir, "cudart64_*.dll"))
+		cublasFiles, _ := filepath.Glob(filepath.Join(binDir, "cublas64_*.dll"))
+		if len(cudaFiles) == 0 || len(cublasFiles) == 0 {
+			report.Items = append(report.Items, DiagnosticItem{
+				Category:  "runtime_dlls",
+				Title:     "CUDA 12.4 Runtime DLLs",
+				Status:    "error",
+				Message:   "Missing cudart64_12.dll or cublas64_12.dll in bin/ directory. CUDA acceleration will fail without these runtime libraries.",
+				FixAction: "download_cudart",
+			})
+		} else {
+			report.Items = append(report.Items, DiagnosticItem{
+				Category: "runtime_dlls",
+				Title:    "CUDA 12.4 Runtime DLLs",
+				Status:   "ok",
+				Message:  fmt.Sprintf("Verified CUDA runtime libraries present (%s, %s).", filepath.Base(cudaFiles[0]), filepath.Base(cublasFiles[0])),
+			})
+		}
+	case "vulkan":
+		// Check for Vulkan in bin or system
+		vulkanBin := filepath.Join(binDir, "vulkan-1.dll")
+		vulkanSys := filepath.Join(os.Getenv("SystemRoot"), "System32", "vulkan-1.dll")
+		hasVulkan := false
+		if _, err := os.Stat(vulkanBin); err == nil {
+			hasVulkan = true
+		} else if _, err := os.Stat(vulkanSys); err == nil {
+			hasVulkan = true
+		}
+
+		if !hasVulkan {
+			report.Items = append(report.Items, DiagnosticItem{
+				Category:  "runtime_dlls",
+				Title:     "Vulkan Driver Runtime",
+				Status:    "warning",
+				Message:   "vulkan-1.dll not found in System32 or bin/. Ensure AMD/Intel graphics drivers are installed.",
+				FixAction: "reinstall",
+			})
+		} else {
+			report.Items = append(report.Items, DiagnosticItem{
+				Category: "runtime_dlls",
+				Title:    "Vulkan Driver Runtime",
+				Status:   "ok",
+				Message:  "Vulkan 1.3 runtime DLL verified for AMD/Universal GPU acceleration.",
+			})
+		}
+	default:
+		report.Items = append(report.Items, DiagnosticItem{
+			Category: "runtime_dlls",
+			Title:    "CPU Standard Runtime",
+			Status:   "ok",
+			Message:  "Standard CPU backend requires no external GPU DLLs.",
+		})
+	}
+
+	// 3. Execution Smoke Test (runs llama-server.exe --help with 3s timeout)
+	if _, err := os.Stat(exePath); err == nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+
+		cmd := exec.CommandContext(ctx, exePath, "--help")
+		out, err := cmd.CombinedOutput()
+		if ctx.Err() == context.DeadlineExceeded {
+			report.Items = append(report.Items, DiagnosticItem{
+				Category:  "smoke_test",
+				Title:     "Binary Execution Smoke Test",
+				Status:    "warning",
+				Message:   "Process timed out while executing '--help'.",
+				FixAction: "kill_zombies",
+			})
+		} else if err != nil && !strings.Contains(string(out), "usage:") && !strings.Contains(string(out), "options:") {
+			report.Items = append(report.Items, DiagnosticItem{
+				Category:  "smoke_test",
+				Title:     "Binary Execution Smoke Test",
+				Status:    "error",
+				Message:   fmt.Sprintf("Failed to launch binary: %v. Output: %s", err, strings.TrimSpace(string(out))),
+				FixAction: "reinstall",
+			})
+		} else {
+			report.Items = append(report.Items, DiagnosticItem{
+				Category: "smoke_test",
+				Title:    "Binary Execution Smoke Test",
+				Status:   "ok",
+				Message:  "Executable launches cleanly and returned help text without crashing.",
+			})
+		}
+	}
+
+	// 4. Port Availability Check
+	if port <= 0 {
+		port = 8080
+	}
+	conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 400*time.Millisecond)
+	if err == nil {
+		_ = conn.Close()
+		report.Items = append(report.Items, DiagnosticItem{
+			Category:  "port",
+			Title:     fmt.Sprintf("Port %d Availability", port),
+			Status:    "warning",
+			Message:   fmt.Sprintf("Port %d is currently occupied by a process. If llama-server is not running, click 'Kill Conflicting Processes'.", port),
+			FixAction: "kill_zombies",
+		})
+	} else {
+		report.Items = append(report.Items, DiagnosticItem{
+			Category: "port",
+			Title:    fmt.Sprintf("Port %d Availability", port),
+			Status:   "ok",
+			Message:  fmt.Sprintf("Port %d is open and ready to bind.", port),
+		})
+	}
+
+	// 5. Directory Storage & Write Permissions
+	testBinFile := filepath.Join(binDir, ".write_test")
+	if err := os.WriteFile(testBinFile, []byte("ok"), 0644); err != nil {
+		report.Items = append(report.Items, DiagnosticItem{
+			Category: "storage",
+			Title:    "Binary Directory Permissions",
+			Status:   "error",
+			Message:  fmt.Sprintf("Cannot write to bin directory (%s): %v", binDir, err),
+		})
+	} else {
+		_ = os.Remove(testBinFile)
+		report.Items = append(report.Items, DiagnosticItem{
+			Category: "storage",
+			Title:    "Binary Directory Permissions",
+			Status:   "ok",
+			Message:  fmt.Sprintf("Read and write access verified for %s.", binDir),
+		})
+	}
+
+	testModelFile := filepath.Join(modelsDir, ".write_test")
+	if err := os.WriteFile(testModelFile, []byte("ok"), 0644); err != nil {
+		report.Items = append(report.Items, DiagnosticItem{
+			Category: "storage",
+			Title:    "Models Directory Permissions",
+			Status:   "warning",
+			Message:  fmt.Sprintf("Cannot write to models directory (%s): %v", modelsDir, err),
+		})
+	} else {
+		_ = os.Remove(testModelFile)
+		report.Items = append(report.Items, DiagnosticItem{
+			Category: "storage",
+			Title:    "Models Directory Permissions",
+			Status:   "ok",
+			Message:  fmt.Sprintf("Read and write access verified for %s.", modelsDir),
+		})
+	}
+
+	// 6. GPU Acceleration Hardware Sanity
+	if variant == "cuda" && !hw.HasNvidia {
+		report.Items = append(report.Items, DiagnosticItem{
+			Category:  "gpu",
+			Title:     "GPU Hardware Acceleration",
+			Status:    "warning",
+			Message:   "CUDA backend selected, but no NVIDIA GPU was detected on this system. Consider switching to Vulkan or CPU in Settings.",
+			FixAction: "reinstall",
+		})
+	} else {
+		report.Items = append(report.Items, DiagnosticItem{
+			Category: "gpu",
+			Title:    "GPU Hardware Acceleration",
+			Status:   "ok",
+			Message:  fmt.Sprintf("Target backend '%s' aligns with detected hardware (%s).", strings.ToUpper(variant), hw.GPUName),
+		})
+	}
+
+	// Calculate issues count
+	for _, it := range report.Items {
+		if it.Status == "error" {
+			report.IssuesCount++
+			report.Healthy = false
+		} else if it.Status == "warning" {
+			report.IssuesCount++
+		}
+	}
+
+	return report
+}
+
+// KillZombieProcesses terminates any lingering llama-server.exe processes on Windows.
+func KillZombieProcesses() error {
+	cmd := exec.Command("taskkill", "/F", "/IM", "llama-server.exe", "/T")
+	_ = cmd.Run()
+	return nil
+}

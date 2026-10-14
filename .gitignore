@@ -1,0 +1,16 @@
+node_modules/
+/dist/
+/build/
+/.mygo/
+mygo_windows_*.syso
+*.exe
+*.dll
+*.so
+*.dylib
+*.gguf
+bin/
+models/
+tmp_download/
+settings.json
+.DS_Store
+Thumbs.db

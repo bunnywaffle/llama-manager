@@ -1,0 +1,959 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>llama.cpp Manager</title>
+    <link rel="stylesheet" href="./src/style.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <!-- App Sidebar -->
+      <aside class="app-sidebar">
+        <div class="sidebar-header">
+          <div class="logo-symbol">
+            <i data-lucide="cpu"></i>
+          </div>
+          <span class="logo-text">llama.cpp</span>
+          <span class="logo-badge">Manager</span>
+        </div>
+
+        <ul class="nav-group">
+          <li class="nav-link active" data-tab="dashboard">
+            <i data-lucide="layout-dashboard"></i>
+            <span>Overview</span>
+          </li>
+          <li class="nav-link" data-tab="models">
+            <i data-lucide="box"></i>
+            <span>Models</span>
+          </li>
+          <li class="nav-link" data-tab="config">
+            <i data-lucide="sliders"></i>
+            <span>Configuration</span>
+          </li>
+          <li class="nav-link" data-tab="logs">
+            <i data-lucide="terminal"></i>
+            <span>Console Logs</span>
+          </li>
+          <li class="nav-link" data-tab="chat">
+            <i data-lucide="message-square"></i>
+            <span>Playground</span>
+          </li>
+          <li class="nav-link" data-tab="updates">
+            <i data-lucide="download-cloud"></i>
+            <span>Releases</span>
+          </li>
+          <li class="nav-link" data-tab="settings">
+            <i data-lucide="settings"></i>
+            <span>Settings</span>
+          </li>
+        </ul>
+
+        <div class="sidebar-footer">
+          <div class="hw-row">
+            <span class="hw-label"><i data-lucide="hard-drive"></i> GPU</span>
+            <span class="hw-value" id="hw-gpu-name">Detecting...</span>
+          </div>
+          <div class="hw-row">
+            <span class="hw-label"><i data-lucide="cpu"></i> Backend</span>
+            <span class="hw-value" id="hw-backend-tag">CUDA 12.4</span>
+          </div>
+          <div class="hw-row">
+            <span class="hw-label">VRAM</span>
+            <span class="hw-value" id="hw-vram">--</span>
+          </div>
+        </div>
+      </aside>
+
+      <!-- Main Content Area -->
+      <main class="app-main">
+        <!-- Top App Bar -->
+        <header class="app-topbar">
+          <h1 class="topbar-title" id="page-title">Overview</h1>
+          <div class="topbar-controls">
+            <div class="status-indicator" id="server-status-pill">
+              <span class="indicator-dot"></span>
+              <span id="server-status-text">Stopped</span>
+            </div>
+            <button class="btn btn-primary btn-sm" id="btn-quick-toggle">
+              <i data-lucide="play"></i>
+              <span id="btn-quick-toggle-text">Start Server</span>
+            </button>
+          </div>
+        </header>
+
+        <!-- Tab Views Container -->
+        <div class="pane-viewport">
+          <!-- 1. OVERVIEW / DASHBOARD -->
+          <div class="pane-view active" id="pane-dashboard">
+            <!-- Alert if backend missing -->
+            <div class="alert-box" id="backend-missing-alert" style="display: none;">
+              <div>
+                <div class="alert-text">llama-server.exe is not installed</div>
+                <div class="alert-sub">Download the official prebuilt Windows CUDA 12.4 binary to start running models.</div>
+              </div>
+              <div style="display: flex; gap: 8px;">
+                <button class="btn btn-secondary btn-sm btn-open-troubleshoot">
+                  <i data-lucide="wrench"></i>
+                  <span>Troubleshoot</span>
+                </button>
+                <button class="btn btn-primary btn-sm" id="btn-go-to-releases">
+                  <i data-lucide="download"></i>
+                  <span>Download Backend</span>
+                </button>
+              </div>
+            </div>
+
+            <!-- Server State Metrics -->
+            <div class="metric-row">
+              <div class="metric-box">
+                <div class="metric-meta">Process State</div>
+                <div class="metric-data" id="dash-status-val">Idle</div>
+                <div class="metric-sub" id="dash-uptime">Not running</div>
+              </div>
+
+              <div class="metric-box">
+                <div class="metric-meta">Active Model</div>
+                <div class="metric-data" id="dash-model-val">None</div>
+                <div class="metric-sub" id="dash-quant-badge">Select below</div>
+              </div>
+
+              <div class="metric-box">
+                <div class="metric-meta">Endpoint & Port</div>
+                <div class="metric-data metric-mono" id="dash-port-val">127.0.0.1:8080</div>
+                <div class="metric-sub">OpenAI compatible API</div>
+              </div>
+
+              <div class="metric-box">
+                <div class="metric-meta">GPU Acceleration</div>
+                <div class="metric-data" id="dash-gpu-layers">99 Layers</div>
+                <div class="metric-sub" id="dash-backend-val">CUDA 12.4 (NVIDIA)</div>
+              </div>
+            </div>
+
+            <!-- Server Control Card -->
+            <div class="surface-card">
+              <div class="surface-header">
+                <div>
+                  <div class="surface-title"><i data-lucide="play"></i> Launch Controller</div>
+                  <div class="surface-desc">Select a local model and start the background llama-server process.</div>
+                </div>
+              </div>
+
+              <div class="form-row">
+                <div class="form-field" style="flex: 2; margin-bottom: 0;">
+                  <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                    <label class="form-label" style="margin-bottom: 0;">Model File (.gguf)</label>
+                    <button class="btn btn-secondary btn-sm" id="btn-import-gguf-dash" style="padding: 2px 8px; font-size: 11px;">
+                      <i data-lucide="folder-input"></i>
+                      <span>Import GGUF...</span>
+                    </button>
+                  </div>
+                  <select class="form-select" id="quick-model-select">
+                    <option value="">(No models found in models/ directory)</option>
+                  </select>
+                </div>
+
+                <div class="form-field" style="width: 120px; margin-bottom: 0;">
+                  <label class="form-label">Port</label>
+                  <input type="number" class="form-input" id="quick-port" value="8080" />
+                </div>
+
+                <div style="display: flex; gap: 8px;">
+                  <button class="btn btn-primary" id="btn-dash-start">
+                    <i data-lucide="play"></i>
+                    <span>Start</span>
+                  </button>
+                  <button class="btn btn-danger" id="btn-dash-stop" style="display: none;">
+                    <i data-lucide="square"></i>
+                    <span>Stop</span>
+                  </button>
+                  <button class="btn btn-secondary" id="btn-dash-restart">
+                    <i data-lucide="rotate-ccw"></i>
+                    <span>Restart</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Quick Inline Prompt Test -->
+            <div class="surface-card">
+              <div class="surface-header">
+                <div class="surface-title"><i data-lucide="terminal"></i> Quick Test Prompt</div>
+                <div class="surface-desc">Send a single test prompt to verify inference and token generation.</div>
+              </div>
+              <div class="form-row">
+                <input type="text" class="form-input" id="dash-test-input" placeholder="e.g. Write a python hello world function..." />
+                <button class="btn btn-secondary" id="btn-dash-test-send">
+                  <i data-lucide="play"></i>
+                  <span>Send</span>
+                </button>
+              </div>
+              <div id="dash-test-output" style="margin-top: 10px; font-family: var(--font-mono); font-size: 12px; color: var(--text-medium); display: none; padding: 10px; background: var(--bg-input); border-radius: var(--radius-sm); border: 1px solid var(--border-subtle); max-height: 160px; overflow-y: auto; white-space: pre-wrap;"></div>
+            </div>
+          </div>
+
+          <!-- 2. MODELS TAB -->
+          <div class="pane-view" id="pane-models">
+            <!-- Local Installed Models -->
+            <div class="surface-card">
+              <div class="surface-header">
+                <div>
+                  <div class="surface-title"><i data-lucide="box"></i> Installed Models</div>
+                  <div class="surface-desc">Local .gguf files discovered in the models directory.</div>
+                </div>
+                <div style="display: flex; gap: 8px;">
+                  <button class="btn btn-secondary btn-sm" id="btn-import-gguf-models">
+                    <i data-lucide="folder-input"></i>
+                    <span>Import GGUF...</span>
+                  </button>
+                  <button class="btn btn-secondary btn-sm" id="btn-refresh-models">
+                    <i data-lucide="refresh-cw"></i>
+                    <span>Refresh</span>
+                  </button>
+                </div>
+              </div>
+
+              <div class="data-table-wrap">
+                <table class="data-table">
+                  <thead>
+                    <tr>
+                      <th>Filename</th>
+                      <th>Quant</th>
+                      <th>Size</th>
+                      <th>Modified</th>
+                      <th style="text-align: right;">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody id="local-models-tbody">
+                    <tr><td colspan="5" style="text-align: center; color: var(--text-low); padding: 20px;">No models found in models/ folder. Download one below.</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <!-- Curated Models -->
+            <div class="surface-card">
+              <div class="surface-header">
+                <div>
+                  <div class="surface-title"><i data-lucide="download-cloud"></i> Curated Models (1-Click Download)</div>
+                  <div class="surface-desc">Pre-tested, high-quality models optimized for 8GB-12GB VRAM cards like RTX 3060.</div>
+                </div>
+              </div>
+
+              <div class="data-table-wrap">
+                <table class="data-table">
+                  <thead>
+                    <tr>
+                      <th>Model</th>
+                      <th>Task / Profile</th>
+                      <th>Quant</th>
+                      <th>Size</th>
+                      <th style="text-align: right;">Download</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td style="font-weight: 500;">Llama 3.2 3B Instruct</td>
+                      <td style="color: var(--text-medium);">Compact general assistant, extremely fast</td>
+                      <td><span class="tag-badge accent">Q4_K_M</span></td>
+                      <td style="font-family: var(--font-mono);">2.0 GB</td>
+                      <td style="text-align: right;">
+                        <button class="btn btn-secondary btn-sm"
+                          data-download-url="https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-Q4_K_M.gguf"
+                          data-filename="Llama-3.2-3B-Instruct-Q4_K_M.gguf">
+                          <i data-lucide="download"></i>
+                          <span>Get</span>
+                        </button>
+                      </td>
+                    </tr>
+                    <tr>
+                      <td style="font-weight: 500;">Qwen 2.5 Coder 7B</td>
+                      <td style="color: var(--text-medium);">Advanced code synthesis, refactoring, agentic tasks</td>
+                      <td><span class="tag-badge accent">Q4_K_M</span></td>
+                      <td style="font-family: var(--font-mono);">4.7 GB</td>
+                      <td style="text-align: right;">
+                        <button class="btn btn-secondary btn-sm"
+                          data-download-url="https://huggingface.co/bartowski/Qwen2.5-Coder-7B-Instruct-GGUF/resolve/main/Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf"
+                          data-filename="Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf">
+                          <i data-lucide="download"></i>
+                          <span>Get</span>
+                        </button>
+                      </td>
+                    </tr>
+                    <tr>
+                      <td style="font-weight: 500;">DeepSeek R1 Distill Qwen 7B</td>
+                      <td style="color: var(--text-medium);">Chain-of-thought reasoning, math and logic</td>
+                      <td><span class="tag-badge accent">Q4_K_M</span></td>
+                      <td style="font-family: var(--font-mono);">4.7 GB</td>
+                      <td style="text-align: right;">
+                        <button class="btn btn-secondary btn-sm"
+                          data-download-url="https://huggingface.co/unsloth/DeepSeek-R1-Distill-Qwen-7B-GGUF/resolve/main/DeepSeek-R1-Distill-Qwen-7B-Q4_K_M.gguf"
+                          data-filename="DeepSeek-R1-Distill-Qwen-7B-Q4_K_M.gguf">
+                          <i data-lucide="download"></i>
+                          <span>Get</span>
+                        </button>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <!-- Hugging Face Explorer -->
+            <div class="surface-card">
+              <div class="surface-header">
+                <div>
+                  <div class="surface-title"><i data-lucide="search"></i> Hugging Face GGUF Downloader</div>
+                  <div class="surface-desc">Download any community GGUF repository directly.</div>
+                </div>
+              </div>
+
+              <div class="form-row" style="margin-bottom: 12px;">
+                <input type="text" class="form-input" id="hf-repo-input" placeholder="e.g. bartowski/Llama-3.2-3B-Instruct-GGUF" />
+                <button class="btn btn-secondary" id="btn-hf-search">
+                  <i data-lucide="search"></i>
+                  <span>Inspect Repo</span>
+                </button>
+              </div>
+
+              <div id="hf-files-container" style="display: none;">
+                <div class="data-table-wrap">
+                  <table class="data-table">
+                    <thead>
+                      <tr>
+                        <th>GGUF File</th>
+                        <th>Quant</th>
+                        <th>Size</th>
+                        <th style="text-align: right;">Download</th>
+                      </tr>
+                    </thead>
+                    <tbody id="hf-files-tbody"></tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 3. CONFIGURATION TAB -->
+          <div class="pane-view" id="pane-config">
+            <div class="surface-card" style="max-width: 680px;">
+              <div class="surface-header">
+                <div>
+                  <div class="surface-title"><i data-lucide="sliders"></i> Server Parameters</div>
+                  <div class="surface-desc">Customize runtime flags passed to llama-server.exe.</div>
+                </div>
+              </div>
+
+              <div class="form-field">
+                <label class="form-label">Host Binding</label>
+                <input type="text" class="form-input" id="cfg-host" value="127.0.0.1" />
+                <div class="surface-desc" style="margin-top: 4px;">Use 127.0.0.1 for local isolation, or 0.0.0.0 to allow LAN requests.</div>
+              </div>
+
+              <div class="form-field">
+                <label class="form-label">Port</label>
+                <input type="number" class="form-input" id="cfg-port" value="8080" />
+              </div>
+
+              <div class="form-field">
+                <label class="form-label">GPU Offload Layers (-ngl)</label>
+                <div class="slider-group">
+                  <input type="range" id="cfg-gpu-layers" min="0" max="99" value="99" />
+                  <span class="slider-value" id="cfg-gpu-layers-val">99</span>
+                </div>
+                <div class="surface-desc" style="margin-top: 4px;">Default is 99 (offloads all layers to NVIDIA RTX 3060).</div>
+              </div>
+
+              <div class="form-field">
+                <label class="form-label">Context Size (-c)</label>
+                <select class="form-select" id="cfg-context">
+                  <option value="2048">2048 tokens</option>
+                  <option value="4096" selected>4096 tokens (Balanced)</option>
+                  <option value="8192">8192 tokens</option>
+                  <option value="16384">16384 tokens</option>
+                  <option value="32768">32768 tokens (High VRAM)</option>
+                </select>
+              </div>
+
+              <div class="form-field">
+                <label class="form-label">CPU Threads (-t)</label>
+                <div class="slider-group">
+                  <input type="range" id="cfg-threads" min="1" max="16" value="6" />
+                  <span class="slider-value" id="cfg-threads-val">6</span>
+                </div>
+              </div>
+
+              <div class="form-field">
+                <label class="form-label">Flash Attention (-fa)</label>
+                <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; color: var(--text-high);">
+                  <input type="checkbox" id="cfg-flash-attn" checked style="accent-color: var(--text-high);" />
+                  <span>Enable Flash Attention (reduces VRAM consumption and increases speed)</span>
+                </label>
+              </div>
+
+              <div class="form-field">
+                <label class="form-label">Router Mode (Multi-Model Serving)</label>
+                <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; color: var(--text-high);">
+                  <input type="checkbox" id="cfg-router-mode" style="accent-color: var(--text-high);" />
+                  <span>Enable Router Mode (--models-path): Serves all models in your models directory dynamically. Switch models on the fly in Playground and API clients without server reboots.</span>
+                </label>
+              </div>
+
+              <!-- Collapsible Advanced Parameters Accordion -->
+              <details class="adv-accordion">
+                <summary class="adv-summary">
+                  <div class="adv-summary-left">
+                    <i data-lucide="chevron-right"></i>
+                    <span>Advanced Model & Sampling Parameters</span>
+                  </div>
+                  <span class="adv-summary-meta">Sampling, Cache, Parallelism & RoPE</span>
+                </summary>
+
+                <div class="adv-content">
+                  <!-- Section 1: Sampling -->
+                  <div>
+                    <div class="adv-section-title">Sampling & Generation</div>
+                    <div class="adv-grid">
+                      <div class="form-field" style="margin-bottom: 0;">
+                        <label class="form-label">Temperature (--temp)</label>
+                        <input type="number" class="form-input" id="cfg-temp" step="0.05" min="0" max="2" value="0.70" />
+                      </div>
+                      <div class="form-field" style="margin-bottom: 0;">
+                        <label class="form-label">Top-P (--top-p)</label>
+                        <input type="number" class="form-input" id="cfg-top-p" step="0.05" min="0" max="1" value="0.90" />
+                      </div>
+                      <div class="form-field" style="margin-bottom: 0;">
+                        <label class="form-label">Top-K (--top-k)</label>
+                        <input type="number" class="form-input" id="cfg-top-k" step="1" min="0" value="40" />
+                      </div>
+                      <div class="form-field" style="margin-bottom: 0;">
+                        <label class="form-label">Min-P (--min-p)</label>
+                        <input type="number" class="form-input" id="cfg-min-p" step="0.01" min="0" max="1" value="0.05" />
+                      </div>
+                      <div class="form-field" style="margin-bottom: 0;">
+                        <label class="form-label">Typical P (--typical)</label>
+                        <input type="number" class="form-input" id="cfg-typical" step="0.05" min="0" max="1" value="1.00" />
+                      </div>
+                      <div class="form-field" style="margin-bottom: 0;">
+                        <label class="form-label">Repeat Penalty</label>
+                        <input type="number" class="form-input" id="cfg-repeat-penalty" step="0.05" min="0" value="1.10" />
+                      </div>
+                      <div class="form-field" style="margin-bottom: 0;">
+                        <label class="form-label">Repeat Last N</label>
+                        <input type="number" class="form-input" id="cfg-repeat-last-n" step="1" min="0" value="64" />
+                      </div>
+                      <div class="form-field" style="margin-bottom: 0;">
+                        <label class="form-label">Presence Penalty</label>
+                        <input type="number" class="form-input" id="cfg-presence-penalty" step="0.1" value="0.0" />
+                      </div>
+                      <div class="form-field" style="margin-bottom: 0;">
+                        <label class="form-label">Frequency Penalty</label>
+                        <input type="number" class="form-input" id="cfg-frequency-penalty" step="0.1" value="0.0" />
+                      </div>
+                      <div class="form-field" style="margin-bottom: 0;">
+                        <label class="form-label">Max Predict (-n)</label>
+                        <input type="number" class="form-input" id="cfg-max-predict" step="1" value="-1" title="-1 for unlimited/model default" />
+                      </div>
+                      <div class="form-field" style="margin-bottom: 0;">
+                        <label class="form-label">Seed (--seed)</label>
+                        <input type="number" class="form-input" id="cfg-seed" step="1" value="-1" title="-1 for random seed" />
+                      </div>
+                    </div>
+                  </div>
+
+                  <!-- Section 2: Memory & KV Cache -->
+                  <div>
+                    <div class="adv-section-title">Memory & KV Cache</div>
+                    <div class="adv-grid">
+                      <div class="form-field" style="margin-bottom: 0;">
+                        <label class="form-label">Micro-batch Size (-ub)</label>
+                        <input type="number" class="form-input" id="cfg-micro-batch" step="64" min="64" value="512" />
+                      </div>
+                      <div class="form-field" style="margin-bottom: 0;">
+                        <label class="form-label">Cache Type K</label>
+                        <select class="form-select" id="cfg-cache-type-k">
+                          <option value="f16" selected>f16 (Standard)</option>
+                          <option value="q8_0">q8_0 (Balanced VRAM)</option>
+                          <option value="q4_0">q4_0 (Minimal VRAM)</option>
+                        </select>
+                      </div>
+                      <div class="form-field" style="margin-bottom: 0;">
+                        <label class="form-label">Cache Type V</label>
+                        <select class="form-select" id="cfg-cache-type-v">
+                          <option value="f16" selected>f16 (Standard)</option>
+                          <option value="q8_0">q8_0 (Balanced VRAM)</option>
+                          <option value="q4_0">q4_0 (Minimal VRAM)</option>
+                        </select>
+                      </div>
+                    </div>
+                    <div class="adv-checkbox-row">
+                      <label class="adv-checkbox">
+                        <input type="checkbox" id="cfg-mlock" />
+                        <span>Lock Memory in RAM (--mlock)</span>
+                      </label>
+                      <label class="adv-checkbox">
+                        <input type="checkbox" id="cfg-no-mmap" />
+                        <span>Disable Memory Mapping (--no-mmap)</span>
+                      </label>
+                    </div>
+                  </div>
+
+                  <!-- Section 3: Concurrency & Engine -->
+                  <div>
+                    <div class="adv-section-title">Concurrency & Server Engine</div>
+                    <div class="adv-grid">
+                      <div class="form-field" style="margin-bottom: 0;">
+                        <label class="form-label">Parallel Slots (-np)</label>
+                        <input type="number" class="form-input" id="cfg-parallel-slots" min="1" max="16" value="1" />
+                      </div>
+                      <div class="form-field" style="margin-bottom: 0;">
+                        <label class="form-label">HTTP Server Threads</label>
+                        <input type="number" class="form-input" id="cfg-threads-http" min="0" value="0" title="0 for auto" />
+                      </div>
+                      <div class="form-field" style="margin-bottom: 0;">
+                        <label class="form-label">Batch Threads (-tb)</label>
+                        <input type="number" class="form-input" id="cfg-threads-batch" min="0" value="0" title="0 for auto" />
+                      </div>
+                    </div>
+                    <div class="adv-checkbox-row">
+                      <label class="adv-checkbox">
+                        <input type="checkbox" id="cfg-cont-batching" checked />
+                        <span>Continuous Batching (-cb)</span>
+                      </label>
+                      <label class="adv-checkbox">
+                        <input type="checkbox" id="cfg-embedding" />
+                        <span>Enable Embeddings Endpoint (--embedding)</span>
+                      </label>
+                      <label class="adv-checkbox">
+                        <input type="checkbox" id="cfg-metrics" />
+                        <span>Prometheus Metrics (--metrics)</span>
+                      </label>
+                    </div>
+                  </div>
+
+                  <!-- Section 4: RoPE Context Scaling & Multi-GPU -->
+                  <div>
+                    <div class="adv-section-title">Context Scaling (RoPE) & Multi-GPU</div>
+                    <div class="adv-grid">
+                      <div class="form-field" style="margin-bottom: 0;">
+                        <label class="form-label">RoPE Scaling Mode</label>
+                        <select class="form-select" id="cfg-rope-scaling">
+                          <option value="none" selected>none</option>
+                          <option value="linear">linear</option>
+                          <option value="yarn">yarn</option>
+                        </select>
+                      </div>
+                      <div class="form-field" style="margin-bottom: 0;">
+                        <label class="form-label">RoPE Scale Factor</label>
+                        <input type="number" class="form-input" id="cfg-rope-scale" step="0.5" min="0" value="1.0" />
+                      </div>
+                      <div class="form-field" style="margin-bottom: 0;">
+                        <label class="form-label">RoPE Base Frequency</label>
+                        <input type="number" class="form-input" id="cfg-rope-freq-base" step="1000" min="0" value="0" title="0 for model default" />
+                      </div>
+                      <div class="form-field" style="margin-bottom: 0;">
+                        <label class="form-label">Main GPU Index</label>
+                        <input type="number" class="form-input" id="cfg-main-gpu" min="0" value="0" />
+                      </div>
+                      <div class="form-field" style="margin-bottom: 0;">
+                        <label class="form-label">Multi-GPU Split Mode</label>
+                        <select class="form-select" id="cfg-split-mode">
+                          <option value="none" selected>none</option>
+                          <option value="layer">layer</option>
+                          <option value="row">row</option>
+                        </select>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </details>
+
+              <div class="form-field">
+                <label class="form-label">Additional CLI Arguments</label>
+                <input type="text" class="form-input" id="cfg-extra-args" placeholder="--alias my-model" />
+              </div>
+
+              <button class="btn btn-primary" id="btn-save-config">
+                <i data-lucide="check-circle"></i>
+                <span>Save Configuration</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- 4. CONSOLE LOGS TAB -->
+          <div class="pane-view" id="pane-logs">
+            <div class="terminal-container">
+              <div class="terminal-toolbar">
+                <div class="terminal-label">
+                  <i data-lucide="terminal"></i>
+                  <span>llama-server process output</span>
+                </div>
+                <div style="display: flex; gap: 8px;">
+                  <button class="btn btn-secondary btn-sm" id="btn-copy-logs">
+                    <i data-lucide="copy"></i>
+                    <span>Copy</span>
+                  </button>
+                  <button class="btn btn-secondary btn-sm" id="btn-clear-logs">
+                    <i data-lucide="trash-2"></i>
+                    <span>Clear</span>
+                  </button>
+                </div>
+              </div>
+              <div class="terminal-body" id="terminal-logs">Process console idle. Logs will stream here once the server starts.</div>
+            </div>
+          </div>
+
+          <!-- 5. CHAT PLAYGROUND TAB -->
+          <div class="pane-view" id="pane-chat">
+            <div class="chat-layout">
+              <!-- Left Sidebar: Chat Sessions / Threads -->
+              <div class="chat-threads-pane">
+                <div class="chat-threads-header">
+                  <span class="chat-threads-title">Conversations</span>
+                  <button class="btn btn-secondary btn-sm" id="btn-new-thread" title="Start a new chat session">
+                    <i data-lucide="plus"></i>
+                    <span>New</span>
+                  </button>
+                </div>
+                <div class="chat-threads-list" id="chat-threads-list">
+                  <!-- Sessions rendered dynamically -->
+                </div>
+              </div>
+
+              <!-- Main Chat Stage -->
+              <div class="chat-stage">
+                <div class="chat-stage-header">
+                  <div class="chat-stage-meta">
+                    <span style="font-weight: 600; font-size: 13px;" id="chat-session-title">Chat Playground</span>
+                    <span class="tag-badge" id="chat-active-model-badge">Default</span>
+                  </div>
+
+                  <!-- Router Mode Model Selector -->
+                  <div class="persona-select-wrap" id="chat-router-model-wrap" style="display: none;">
+                    <span style="font-size: 11.5px; color: var(--text-medium);">Model:</span>
+                    <select class="persona-select" id="chat-router-model-select">
+                      <!-- Rendered dynamically when Router Mode is on -->
+                    </select>
+                  </div>
+
+                  <!-- Persona Selector and Custom Creator -->
+                  <div class="persona-select-wrap">
+                    <span style="font-size: 11.5px; color: var(--text-medium);">Persona:</span>
+                    <select class="persona-select" id="chat-persona-select">
+                      <!-- Rendered dynamically -->
+                    </select>
+                    <button class="btn btn-secondary btn-sm" id="btn-new-persona" title="Create custom persona system prompt">
+                      <i data-lucide="plus"></i>
+                      <span>New Persona</span>
+                    </button>
+                    <button class="btn btn-secondary btn-sm" id="btn-clear-chat" title="Clear current session messages">
+                      <i data-lucide="trash-2"></i>
+                    </button>
+                  </div>
+                </div>
+
+                <!-- Messages Log with branching tree nodes -->
+                <div class="chat-log" id="chat-messages">
+                  <!-- Messages rendered dynamically -->
+                </div>
+
+                <!-- Chat Input Bar -->
+                <form class="chat-bar" id="chat-form">
+                  <input type="text" class="form-input" id="chat-input" placeholder="Send a message to your model..." autocomplete="off" />
+                  <button type="submit" class="btn btn-primary" id="btn-chat-send">
+                    <i data-lucide="play"></i>
+                    <span>Send</span>
+                  </button>
+                </form>
+              </div>
+            </div>
+          </div>
+
+          <!-- 6. BACKEND & RELEASES TAB -->
+          <div class="pane-view" id="pane-updates">
+            <div class="surface-card">
+              <div class="surface-header">
+                <div>
+                  <div class="surface-title"><i data-lucide="cpu"></i> Active llama.cpp Installation</div>
+                  <div class="surface-desc">Binary status and version currently installed on this system.</div>
+                </div>
+                <div style="display: flex; gap: 8px; align-items: center;">
+                  <button class="btn btn-secondary btn-sm btn-open-troubleshoot">
+                    <i data-lucide="wrench"></i>
+                    <span>Troubleshoot</span>
+                  </button>
+                  <span class="tag-badge" id="backend-status-badge">Checking...</span>
+                </div>
+              </div>
+
+              <div class="metric-row" style="margin-bottom: 0;">
+                <div class="metric-box">
+                  <div class="metric-meta">Installed Version</div>
+                  <div class="metric-data metric-mono" id="backend-version-text">None</div>
+                </div>
+                <div class="metric-box">
+                  <div class="metric-meta">Backend Architecture</div>
+                  <div class="metric-data" id="backend-variant-text">CUDA 12.4 (NVIDIA)</div>
+                </div>
+                <div class="metric-box">
+                  <div class="metric-meta">Executable Path</div>
+                  <div class="metric-data metric-mono" style="font-size: 12.5px;" id="backend-path-text">bin/llama-server.exe</div>
+                </div>
+              </div>
+            </div>
+
+            <div class="surface-card">
+              <div class="surface-header">
+                <div>
+                  <div class="surface-title"><i data-lucide="download-cloud"></i> Official GitHub Releases</div>
+                  <div class="surface-desc">Releases from ggerganov/llama.cpp. Select variant and click install.</div>
+                </div>
+                <button class="btn btn-secondary btn-sm" id="btn-check-releases">
+                  <i data-lucide="refresh-cw"></i>
+                  <span>Check Releases</span>
+                </button>
+              </div>
+
+              <div class="data-table-wrap">
+                <table class="data-table">
+                  <thead>
+                    <tr>
+                      <th>Release Tag</th>
+                      <th>Title</th>
+                      <th>Date</th>
+                      <th>Target Acceleration</th>
+                      <th style="text-align: right;">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody id="releases-tbody">
+                    <tr><td colspan="5" style="text-align: center; color: var(--text-low); padding: 18px;">Click "Check Releases" to query GitHub API.</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <!-- 7. SETTINGS TAB -->
+          <div class="pane-view" id="pane-settings">
+            <!-- 1. Backend & Hardware Acceleration -->
+            <div class="surface-card">
+              <div class="surface-header">
+                <div>
+                  <div class="surface-title"><i data-lucide="cpu"></i> Compute Backend & Hardware Acceleration</div>
+                  <div class="surface-desc">Switch the execution backend variant for llama-server.exe.</div>
+                </div>
+                <div style="display: flex; gap: 8px; align-items: center;">
+                  <button class="btn btn-secondary btn-sm btn-open-troubleshoot">
+                    <i data-lucide="wrench"></i>
+                    <span>Troubleshoot</span>
+                  </button>
+                  <span class="tag-badge accent" id="settings-current-backend-tag">CUDA</span>
+                </div>
+              </div>
+
+              <div class="backend-card-grid">
+                <label class="backend-radio-card" id="card-backend-cuda">
+                  <input type="radio" name="opt-backend" value="cuda" id="radio-backend-cuda" checked />
+                  <div class="backend-card-content">
+                    <div class="backend-card-header">
+                      <span class="backend-card-title">CUDA 12.4 (NVIDIA)</span>
+                      <span class="tag-badge accent">NVIDIA GPU</span>
+                    </div>
+                    <div class="backend-card-desc">Offloads tensor operations to NVIDIA CUDA cores. Recommended for GeForce RTX / GTX GPUs.</div>
+                  </div>
+                </label>
+
+                <label class="backend-radio-card" id="card-backend-vulkan">
+                  <input type="radio" name="opt-backend" value="vulkan" id="radio-backend-vulkan" />
+                  <div class="backend-card-content">
+                    <div class="backend-card-header">
+                      <span class="backend-card-title">Vulkan (AMD Radeon & Universal)</span>
+                      <span class="tag-badge">AMD / Intel / GPU</span>
+                    </div>
+                    <div class="backend-card-desc">Universal shader-based GPU acceleration for AMD Radeon (RX 6000/7000), Intel Arc, or systems without CUDA drivers.</div>
+                  </div>
+                </label>
+
+                <label class="backend-radio-card" id="card-backend-cpu">
+                  <input type="radio" name="opt-backend" value="cpu" id="radio-backend-cpu" />
+                  <div class="backend-card-content">
+                    <div class="backend-card-header">
+                      <span class="backend-card-title">CPU (Standard AVX2)</span>
+                      <span class="tag-badge">x86_64 CPU</span>
+                    </div>
+                    <div class="backend-card-desc">Pure CPU inference without GPU acceleration. Highly compatible and works on all x86_64 machines.</div>
+                  </div>
+                </label>
+              </div>
+
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 14px; border-top: 1px solid var(--border-subtle); padding-top: 12px;">
+                <div style="font-size: 12px; color: var(--text-medium);" id="settings-backend-hint">
+                  Switching backend downloads and activates the official llama.cpp release variant.
+                </div>
+                <button class="btn btn-primary" id="btn-switch-backend">
+                  <i data-lucide="refresh-cw"></i>
+                  <span>Switch & Apply Backend</span>
+                </button>
+              </div>
+            </div>
+
+            <!-- 2. Models Folder & Default Model -->
+            <div class="surface-card">
+              <div class="surface-header">
+                <div>
+                  <div class="surface-title"><i data-lucide="box"></i> Models Directory & Default Model</div>
+                  <div class="surface-desc">Configure where local GGUF models are stored and scanned on disk.</div>
+                </div>
+              </div>
+
+              <div class="form-field">
+                <label class="form-label">Models Storage Directory</label>
+                <div class="path-input-group">
+                  <input type="text" class="form-input path-input" id="settings-models-dir" readonly />
+                  <button class="btn btn-secondary btn-sm" id="btn-browse-models-dir" title="Select directory using Windows dialog">
+                    <i data-lucide="folder-input"></i>
+                    <span>Browse...</span>
+                  </button>
+                  <button class="btn btn-secondary btn-sm" id="btn-open-models-dir" title="Open directory in Windows File Explorer">
+                    <i data-lucide="folder"></i>
+                    <span>Explorer</span>
+                  </button>
+                </div>
+                <div class="surface-desc" style="margin-top: 4px;">You can point this to an external drive or any folder containing .gguf models.</div>
+              </div>
+
+              <div class="form-field" style="margin-bottom: 0;">
+                <label class="form-label">Default Startup Model</label>
+                <select class="form-select" id="settings-default-model-select">
+                  <option value="">(Auto-select first available model)</option>
+                </select>
+                <div class="surface-desc" style="margin-top: 4px;">Model automatically pre-selected when the application opens.</div>
+              </div>
+            </div>
+
+            <!-- 3. App Data Folder -->
+            <div class="surface-card">
+              <div class="surface-header">
+                <div>
+                  <div class="surface-title"><i data-lucide="hard-drive"></i> Application Data Directory</div>
+                  <div class="surface-desc">Location of installed backend binaries, downloads, logs, and settings.</div>
+                </div>
+              </div>
+
+              <div class="form-field" style="margin-bottom: 0;">
+                <label class="form-label">Working App Data Path</label>
+                <div class="path-input-group">
+                  <input type="text" class="form-input path-input" id="settings-appdata-dir" readonly />
+                  <button class="btn btn-secondary btn-sm" id="btn-browse-appdata-dir" title="Change App Data directory">
+                    <i data-lucide="folder-input"></i>
+                    <span>Browse...</span>
+                  </button>
+                  <button class="btn btn-secondary btn-sm" id="btn-open-appdata-dir" title="Open in Windows File Explorer">
+                    <i data-lucide="folder"></i>
+                    <span>Explorer</span>
+                  </button>
+                </div>
+                <div class="surface-desc" style="margin-top: 4px;">Contains `bin/llama-server.exe`, `version.txt`, and runtime logs.</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </main>
+    </div>
+
+    <!-- Floating Download Progress Card -->
+    <div class="progress-card" id="progress-overlay">
+      <div class="progress-info">
+        <span id="prog-task">Downloading...</span>
+        <span class="tag-badge" id="prog-pct">0%</span>
+      </div>
+      <div style="font-size: 11.5px; color: var(--text-medium); margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" id="prog-item">
+        Filename
+      </div>
+      <div class="progress-bar-bg">
+        <div class="progress-bar-fill" id="prog-fill"></div>
+      </div>
+      <div class="progress-stats">
+        <span id="prog-speed">0 MB/s</span>
+        <span id="prog-bytes">0 / 0 MB</span>
+      </div>
+    </div>
+
+    <!-- Custom Persona Modal -->
+    <div class="modal-overlay" id="modal-persona">
+      <div class="modal-dialog">
+        <div class="modal-header">
+          <div class="modal-title">
+            <span>Create Custom Persona</span>
+          </div>
+          <button class="btn btn-secondary btn-sm" id="btn-close-persona-modal" style="padding: 2px 6px;">
+            <i data-lucide="x"></i>
+          </button>
+        </div>
+        <div class="modal-body">
+          <div class="form-field">
+            <label class="form-label">Persona Name</label>
+            <input type="text" class="form-input" id="persona-name-input" placeholder="e.g. Senior Security Auditor" />
+          </div>
+          <div class="form-field">
+            <label class="form-label">Role Description</label>
+            <input type="text" class="form-input" id="persona-desc-input" placeholder="e.g. Scrutinizes code for OWASP vulnerabilities" />
+          </div>
+          <div class="form-field" style="margin-bottom: 0;">
+            <label class="form-label">System Prompt</label>
+            <textarea class="form-input" id="persona-prompt-input" rows="5" style="min-height: 100px; resize: vertical; font-family: var(--font-sans);" placeholder="You are an expert... Provide concise, actionable feedback."></textarea>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" id="btn-cancel-persona">Cancel</button>
+          <button class="btn btn-primary" id="btn-save-persona">
+            <i data-lucide="check"></i>
+            <span>Save Persona</span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Troubleshooting & Diagnostics Modal -->
+    <div class="modal-overlay" id="modal-troubleshoot">
+      <div class="modal-dialog" style="width: 580px;">
+        <div class="modal-header">
+          <div class="modal-title" style="display: flex; align-items: center; gap: 8px;">
+            <i data-lucide="wrench"></i>
+            <span>Backend Diagnostics & Troubleshooting</span>
+          </div>
+          <button class="btn btn-secondary btn-sm" id="btn-close-troubleshoot-modal" style="padding: 2px 6px;">
+            <i data-lucide="x"></i>
+          </button>
+        </div>
+        <div class="modal-body" style="max-height: 440px; overflow-y: auto;">
+          <div style="font-size: 12.5px; color: var(--text-medium); margin-bottom: 10px;" id="diag-summary-text">
+            Scanning backend executable, runtime DLLs, ports, and permissions...
+          </div>
+          <div id="diag-items-list" class="diag-list">
+            <!-- Diagnostic checks rendered dynamically -->
+          </div>
+        </div>
+        <div class="modal-footer" style="justify-content: space-between;">
+          <div style="display: flex; gap: 8px;">
+            <button class="btn btn-secondary btn-sm" id="btn-kill-zombies" title="Terminate lingering llama-server processes">
+              <i data-lucide="square"></i>
+              <span>Kill Conflicting Process</span>
+            </button>
+            <button class="btn btn-secondary btn-sm" id="btn-repair-backend" title="Re-download and repair missing files">
+              <i data-lucide="refresh-cw"></i>
+              <span>Auto-Repair Backend</span>
+            </button>
+          </div>
+          <button class="btn btn-primary btn-sm" id="btn-rerun-diagnostics">
+            <i data-lucide="refresh-cw"></i>
+            <span>Re-run Scan</span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <script type="module" src="./src/main.ts"></script>
+  </body>
+</html>

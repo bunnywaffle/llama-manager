@@ -1,0 +1,1454 @@
+import {
+  createIcons,
+  Cpu,
+  LayoutDashboard,
+  Box,
+  Sliders,
+  Terminal,
+  MessageSquare,
+  DownloadCloud,
+  HardDrive,
+  Play,
+  Square,
+  RotateCcw,
+  Download,
+  RefreshCw,
+  Search,
+  CheckCircle,
+  Copy,
+  Trash2,
+  FolderInput,
+  Folder,
+  Settings,
+  Wrench,
+  ChevronRight,
+  ChevronLeft,
+  Edit2,
+  Plus,
+  Check,
+  X,
+} from "lucide";
+import {
+  LlamaService,
+  events,
+  type ServerStatus,
+  type ProgressReport,
+  type ChatMessage,
+  type ServerConfig,
+  type AppSettings,
+} from "./mygo";
+import {
+  type ChatNode,
+  type ChatSession,
+  type Persona,
+  getPersonas,
+  saveCustomPersona,
+  getPersonaById,
+  loadAllSessions,
+  saveSession,
+  deleteSession,
+  getActiveSessionId,
+  setActiveSessionId,
+  createNewSession,
+  addMessageToSession,
+  editMessageNode,
+  regenerateAssistantNode,
+  switchSiblingBranch,
+  getActiveConversationPath,
+  getSiblingInfo,
+} from "./chat_tree";
+
+function renderIcons() {
+  createIcons({
+    icons: {
+      Cpu,
+      LayoutDashboard,
+      Box,
+      Sliders,
+      Terminal,
+      MessageSquare,
+      DownloadCloud,
+      HardDrive,
+      Play,
+      Square,
+      RotateCcw,
+      Download,
+      RefreshCw,
+      Search,
+      CheckCircle,
+      Copy,
+      Trash2,
+      FolderInput,
+      Folder,
+      Settings,
+      Wrench,
+      ChevronRight,
+      ChevronLeft,
+      Edit2,
+      Plus,
+      Check,
+      X,
+    },
+  });
+}
+
+// Helpers
+const $ = <T extends HTMLElement>(sel: string) => document.querySelector<T>(sel)!;
+const $$ = (sel: string) => document.querySelectorAll<HTMLElement>(sel);
+
+let isServerRunning = false;
+let chatHistory: ChatMessage[] = [];
+
+async function init() {
+  renderIcons();
+  setupTabs();
+  setupSliders();
+  setupEvents();
+  setupChat();
+  setupActions();
+  setupInlineTest();
+  setupSettings();
+  setupTroubleshoot();
+
+  await Promise.all([
+    loadHardware(),
+    loadBackendStatus(),
+    loadModels(),
+    loadConfig(),
+    loadServerStatus(),
+    loadLogs(),
+    loadSettings(),
+  ]);
+
+  renderIcons();
+}
+
+// Tab navigation
+function setupTabs() {
+  $$(".nav-link").forEach((item) => {
+    item.addEventListener("click", () => {
+      const tabId = item.getAttribute("data-tab");
+      if (!tabId) return;
+
+      $$(".nav-link").forEach((i) => i.classList.remove("active"));
+      item.classList.add("active");
+
+      $$(".pane-view").forEach((p) => p.classList.remove("active"));
+      const target = $(`#pane-${tabId}`);
+      if (target) target.classList.add("active");
+
+      const titles: Record<string, string> = {
+        dashboard: "Overview",
+        models: "Models",
+        config: "Configuration",
+        logs: "Console Logs",
+        chat: "Playground",
+        updates: "Releases",
+        settings: "Settings",
+      };
+      $("#page-title").textContent = titles[tabId] || "llama.cpp";
+
+      if (tabId === "updates") loadReleases();
+      if (tabId === "models") loadModels();
+      if (tabId === "settings") loadSettings();
+
+      renderIcons();
+    });
+  });
+
+  $("#btn-go-to-releases")?.addEventListener("click", () => {
+    const relNav = document.querySelector<HTMLElement>('[data-tab="updates"]');
+    relNav?.click();
+  });
+}
+
+
+function setupSliders() {
+  const gpuSlider = $<HTMLInputElement>("#cfg-gpu-layers");
+  const gpuVal = $("#cfg-gpu-layers-val");
+  gpuSlider.addEventListener("input", () => {
+    gpuVal.textContent = gpuSlider.value;
+  });
+
+  const threadSlider = $<HTMLInputElement>("#cfg-threads");
+  const threadVal = $("#cfg-threads-val");
+  threadSlider.addEventListener("input", () => {
+    threadVal.textContent = threadSlider.value;
+  });
+}
+
+async function loadHardware() {
+  try {
+    const hw = await LlamaService.getHardware();
+    $("#hw-gpu-name").textContent = hw.gpuName || "CPU Only";
+    $("#hw-backend-tag").textContent = hw.recommendedBackend.toUpperCase();
+    $("#hw-vram").textContent = hw.vram || "--";
+    $("#dash-backend-val").textContent = `${hw.recommendedBackend.toUpperCase()} (${hw.gpuName || "CPU"})`;
+
+    if (hw.threads) {
+      const rec = Math.max(1, Math.min(16, Math.floor(hw.threads / 2)));
+      $<HTMLInputElement>("#cfg-threads").value = String(rec);
+      $("#cfg-threads-val").textContent = String(rec);
+    }
+  } catch (err) {
+    console.error("Hardware detection error:", err);
+  }
+}
+
+async function loadBackendStatus() {
+  try {
+    const b = await LlamaService.getInstalledBackend();
+    const alert = $("#backend-missing-alert");
+    const badge = $("#backend-status-badge");
+    const verText = $("#backend-version-text");
+    const varText = $("#backend-variant-text");
+
+    if (b.installed) {
+      alert.style.display = "none";
+      badge.textContent = "Installed";
+      badge.className = "tag-badge accent";
+      verText.textContent = b.version || "Installed";
+      varText.textContent = (b.variant || "cuda").toUpperCase();
+    } else {
+      alert.style.display = "flex";
+      badge.textContent = "Missing";
+      badge.className = "tag-badge";
+      verText.textContent = "None";
+      varText.textContent = "Uninstalled";
+    }
+  } catch (err) {
+    console.error("Backend status error:", err);
+  }
+}
+
+async function loadModels() {
+  try {
+    const models = await LlamaService.listModels();
+    const quickSelect = $<HTMLSelectElement>("#quick-model-select");
+    const tbody = $("#local-models-tbody");
+
+    quickSelect.innerHTML = "";
+    tbody.innerHTML = "";
+
+    if (!models || models.length === 0) {
+      quickSelect.innerHTML = `<option value="">(No models found in models/ folder)</option>`;
+      tbody.innerHTML = `<tr><td colspan="5" style="text-align: center; color: var(--text-low); padding: 20px;">No models in models/ directory. Place .gguf files there or download below.</td></tr>`;
+      return;
+    }
+
+    models.forEach((m) => {
+      const opt = document.createElement("option");
+      opt.value = m.path;
+      opt.textContent = `${m.name} [${m.quant}] (${m.sizeFormatted})`;
+      quickSelect.appendChild(opt);
+
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td style="font-weight: 500; font-family: var(--font-mono); font-size: 12px;">${m.name}</td>
+        <td><span class="tag-badge">${m.quant}</span></td>
+        <td style="font-family: var(--font-mono);">${m.sizeFormatted}</td>
+        <td style="color: var(--text-low); font-size: 11.5px;">${m.modifiedAt}</td>
+        <td style="text-align: right;">
+          <div style="display: inline-flex; gap: 6px;">
+            <button class="btn btn-secondary btn-sm btn-sel-model" data-path="${m.path}">Select</button>
+            <button class="btn btn-danger btn-sm btn-del-model" data-name="${m.name}">Delete</button>
+          </div>
+        </td>
+      `;
+      tbody.appendChild(tr);
+    });
+
+    $$(".btn-sel-model").forEach((b) => {
+      b.addEventListener("click", () => {
+        const p = b.getAttribute("data-path");
+        if (p) {
+          quickSelect.value = p;
+          const nav = document.querySelector<HTMLElement>('[data-tab="dashboard"]');
+          nav?.click();
+        }
+      });
+    });
+
+    const defSelect = document.querySelector<HTMLSelectElement>("#settings-default-model-select");
+    if (defSelect) {
+      const cur = defSelect.value;
+      defSelect.innerHTML = `<option value="">(Auto-select first available model)</option>`;
+      models.forEach((m) => {
+        const opt = document.createElement("option");
+        opt.value = m.path;
+        opt.textContent = `${m.name} [${m.quant}] (${m.sizeFormatted})`;
+        defSelect.appendChild(opt);
+      });
+      if (cur) defSelect.value = cur;
+    }
+
+    try {
+      const s = await LlamaService.getSettings();
+      if (defSelect && s.defaultModel) {
+        defSelect.value = s.defaultModel;
+      }
+      if (s.defaultModel && Array.from(quickSelect.options).some((o) => o.value === s.defaultModel)) {
+        quickSelect.value = s.defaultModel;
+      }
+    } catch {}
+
+    const routerSelect = document.querySelector<HTMLSelectElement>("#chat-router-model-select");
+    if (routerSelect) {
+      const cur = routerSelect.value;
+      routerSelect.innerHTML = "";
+      models.forEach((m) => {
+        const opt = document.createElement("option");
+        opt.value = m.name;
+        opt.textContent = `${m.name} [${m.quant}]`;
+        routerSelect.appendChild(opt);
+      });
+      if (cur) routerSelect.value = cur;
+    }
+
+    $$(".btn-del-model").forEach((b) => {
+      b.addEventListener("click", async () => {
+        const name = b.getAttribute("data-name");
+        if (!name) return;
+        if (confirm(`Delete local model ${name}?`)) {
+          await LlamaService.deleteModel(name);
+          loadModels();
+        }
+      });
+    });
+  } catch (err) {
+    console.error("Load models error:", err);
+  }
+}
+
+
+function collectConfigFromUI(overrideModelPath?: string): ServerConfig {
+  const quickSelect = $<HTMLSelectElement>("#quick-model-select");
+  return {
+    modelPath: overrideModelPath !== undefined ? overrideModelPath : (quickSelect.value || ""),
+    host: $<HTMLInputElement>("#cfg-host").value || "127.0.0.1",
+    port: Number($<HTMLInputElement>("#quick-port").value || 8080),
+    gpuLayers: Number($<HTMLInputElement>("#cfg-gpu-layers").value || 99),
+    contextSize: Number($<HTMLSelectElement>("#cfg-context").value || 4096),
+    threads: Number($<HTMLInputElement>("#cfg-threads").value || 6),
+    batchSize: 512,
+    flashAttention: $<HTMLInputElement>("#cfg-flash-attn").checked,
+    extraArgs: $<HTMLInputElement>("#cfg-extra-args").value,
+
+    // Advanced Sampling
+    temperature: Number($<HTMLInputElement>("#cfg-temp").value || 0.70),
+    topP: Number($<HTMLInputElement>("#cfg-top-p").value || 0.90),
+    topK: Number($<HTMLInputElement>("#cfg-top-k").value || 40),
+    minP: Number($<HTMLInputElement>("#cfg-min-p").value || 0.05),
+    typicalP: Number($<HTMLInputElement>("#cfg-typical").value || 1.00),
+    repeatPenalty: Number($<HTMLInputElement>("#cfg-repeat-penalty").value || 1.10),
+    repeatLastN: Number($<HTMLInputElement>("#cfg-repeat-last-n").value || 64),
+    presencePenalty: Number($<HTMLInputElement>("#cfg-presence-penalty").value || 0.0),
+    frequencyPenalty: Number($<HTMLInputElement>("#cfg-frequency-penalty").value || 0.0),
+    maxPredict: Number($<HTMLInputElement>("#cfg-max-predict").value || -1),
+    seed: Number($<HTMLInputElement>("#cfg-seed").value || -1),
+
+    // Memory & KV Cache
+    microBatchSize: Number($<HTMLInputElement>("#cfg-micro-batch").value || 512),
+    cacheTypeK: $<HTMLSelectElement>("#cfg-cache-type-k").value || "f16",
+    cacheTypeV: $<HTMLSelectElement>("#cfg-cache-type-v").value || "f16",
+    mlock: $<HTMLInputElement>("#cfg-mlock").checked,
+    noMmap: $<HTMLInputElement>("#cfg-no-mmap").checked,
+
+    // Concurrency & Server
+    parallelSlots: Number($<HTMLInputElement>("#cfg-parallel-slots").value || 1),
+    contBatching: $<HTMLInputElement>("#cfg-cont-batching").checked,
+    threadsHttp: Number($<HTMLInputElement>("#cfg-threads-http").value || 0),
+    threadsBatch: Number($<HTMLInputElement>("#cfg-threads-batch").value || 0),
+    embedding: $<HTMLInputElement>("#cfg-embedding").checked,
+    metrics: $<HTMLInputElement>("#cfg-metrics").checked,
+
+    // Multi-GPU & RoPE
+    mainGpu: Number($<HTMLInputElement>("#cfg-main-gpu").value || 0),
+    splitMode: $<HTMLSelectElement>("#cfg-split-mode").value || "none",
+    ropeScaling: $<HTMLSelectElement>("#cfg-rope-scaling").value || "none",
+    ropeScale: Number($<HTMLInputElement>("#cfg-rope-scale").value || 1.0),
+    ropeFreqBase: Number($<HTMLInputElement>("#cfg-rope-freq-base").value || 0),
+
+    // Router Mode
+    routerMode: $<HTMLInputElement>("#cfg-router-mode")?.checked ?? false,
+    modelsDir: $<HTMLInputElement>("#settings-models-dir")?.value || "",
+  };
+}
+
+function updateRouterModeUI(enabled: boolean) {
+  const routerWrap = document.querySelector<HTMLElement>("#chat-router-model-wrap");
+  if (routerWrap) {
+    routerWrap.style.display = enabled ? "flex" : "none";
+  }
+}
+
+async function loadConfig() {
+  try {
+    const cfg = await LlamaService.getServerConfig();
+    $<HTMLInputElement>("#cfg-host").value = cfg.host || "127.0.0.1";
+    $<HTMLInputElement>("#cfg-port").value = String(cfg.port || 8080);
+    $<HTMLInputElement>("#quick-port").value = String(cfg.port || 8080);
+    $<HTMLInputElement>("#cfg-gpu-layers").value = String(cfg.gpuLayers ?? 99);
+    $("#cfg-gpu-layers-val").textContent = String(cfg.gpuLayers ?? 99);
+    $<HTMLSelectElement>("#cfg-context").value = String(cfg.contextSize || 4096);
+    $<HTMLInputElement>("#cfg-flash-attn").checked = cfg.flashAttention ?? true;
+    $<HTMLInputElement>("#cfg-extra-args").value = cfg.extraArgs || "";
+
+    const routerCheck = $<HTMLInputElement>("#cfg-router-mode");
+    if (routerCheck) {
+      routerCheck.checked = cfg.routerMode ?? false;
+      routerCheck.addEventListener("change", () => {
+        updateRouterModeUI(routerCheck.checked);
+      });
+      updateRouterModeUI(cfg.routerMode ?? false);
+    }
+
+    // Advanced Sampling
+    $<HTMLInputElement>("#cfg-temp").value = String(cfg.temperature ?? 0.70);
+    $<HTMLInputElement>("#cfg-top-p").value = String(cfg.topP ?? 0.90);
+    $<HTMLInputElement>("#cfg-top-k").value = String(cfg.topK ?? 40);
+    $<HTMLInputElement>("#cfg-min-p").value = String(cfg.minP ?? 0.05);
+    $<HTMLInputElement>("#cfg-typical").value = String(cfg.typicalP ?? 1.00);
+    $<HTMLInputElement>("#cfg-repeat-penalty").value = String(cfg.repeatPenalty ?? 1.10);
+    $<HTMLInputElement>("#cfg-repeat-last-n").value = String(cfg.repeatLastN ?? 64);
+    $<HTMLInputElement>("#cfg-presence-penalty").value = String(cfg.presencePenalty ?? 0.0);
+    $<HTMLInputElement>("#cfg-frequency-penalty").value = String(cfg.frequencyPenalty ?? 0.0);
+    $<HTMLInputElement>("#cfg-max-predict").value = String(cfg.maxPredict ?? -1);
+    $<HTMLInputElement>("#cfg-seed").value = String(cfg.seed ?? -1);
+
+    // Memory & KV Cache
+    $<HTMLInputElement>("#cfg-micro-batch").value = String(cfg.microBatchSize || 512);
+    $<HTMLSelectElement>("#cfg-cache-type-k").value = cfg.cacheTypeK || "f16";
+    $<HTMLSelectElement>("#cfg-cache-type-v").value = cfg.cacheTypeV || "f16";
+    $<HTMLInputElement>("#cfg-mlock").checked = cfg.mlock ?? false;
+    $<HTMLInputElement>("#cfg-no-mmap").checked = cfg.noMmap ?? false;
+
+    // Concurrency & Server
+    $<HTMLInputElement>("#cfg-parallel-slots").value = String(cfg.parallelSlots || 1);
+    $<HTMLInputElement>("#cfg-cont-batching").checked = cfg.contBatching ?? true;
+    $<HTMLInputElement>("#cfg-threads-http").value = String(cfg.threadsHttp || 0);
+    $<HTMLInputElement>("#cfg-threads-batch").value = String(cfg.threadsBatch || 0);
+    $<HTMLInputElement>("#cfg-embedding").checked = cfg.embedding ?? false;
+    $<HTMLInputElement>("#cfg-metrics").checked = cfg.metrics ?? false;
+
+    // Multi-GPU & RoPE
+    $<HTMLInputElement>("#cfg-main-gpu").value = String(cfg.mainGpu || 0);
+    $<HTMLSelectElement>("#cfg-split-mode").value = cfg.splitMode || "none";
+    $<HTMLSelectElement>("#cfg-rope-scaling").value = cfg.ropeScaling || "none";
+    $<HTMLInputElement>("#cfg-rope-scale").value = String(cfg.ropeScale || 1.0);
+    $<HTMLInputElement>("#cfg-rope-freq-base").value = String(cfg.ropeFreqBase || 0);
+  } catch (err) {
+    console.error("Load config error:", err);
+  }
+}
+
+
+async function loadServerStatus() {
+  try {
+    const st = await LlamaService.getServerStatus();
+    updateServerUI(st);
+  } catch (err) {
+    console.error("Server status error:", err);
+  }
+}
+
+function updateServerUI(st: ServerStatus) {
+  isServerRunning = st.running;
+  const pill = $("#server-status-pill");
+  const pillText = $("#server-status-text");
+  const quickBtn = $("#btn-quick-toggle");
+  const quickBtnText = $("#btn-quick-toggle-text");
+  const dashStart = $("#btn-dash-start");
+  const dashStop = $("#btn-dash-stop");
+  const dashStatus = $("#dash-status-val");
+  const dashUptime = $("#dash-uptime");
+  const dashModel = $("#dash-model-val");
+  const dashPort = $("#dash-port-val");
+
+  if (st.running) {
+    pill.className = "status-indicator online";
+    pillText.textContent = `Running (${st.host}:${st.port})`;
+    quickBtn.className = "btn btn-danger btn-sm";
+    quickBtnText.textContent = "Stop";
+    dashStart.style.display = "none";
+    dashStop.style.display = "inline-flex";
+    dashStatus.textContent = "Active";
+    dashStatus.style.color = "var(--status-green)";
+    dashUptime.textContent = `PID ${st.pid} · Uptime ${formatUptime(st.uptimeSeconds)}`;
+    dashModel.textContent = st.activeModel || "Loaded";
+    dashPort.textContent = `${st.host}:${st.port}`;
+    const chatBadge = $("#chat-active-model-badge");
+    if (chatBadge) chatBadge.textContent = st.activeModel ? st.activeModel.split("/").pop()!.split("\\").pop()! : "Active";
+  } else {
+    pill.className = "status-indicator";
+    pillText.textContent = "Stopped";
+    quickBtn.className = "btn btn-primary btn-sm";
+    quickBtnText.textContent = "Start Server";
+    dashStart.style.display = "inline-flex";
+    dashStop.style.display = "none";
+    dashStatus.textContent = "Idle";
+    dashStatus.style.color = "var(--text-high)";
+    dashUptime.textContent = "Not running";
+    const chatBadge = $("#chat-active-model-badge");
+    if (chatBadge) chatBadge.textContent = "Offline";
+  }
+}
+
+
+function formatUptime(sec: number) {
+  if (sec < 60) return `${sec}s`;
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  if (m < 60) return `${m}m ${s}s`;
+  const h = Math.floor(m / 60);
+  return `${h}h ${m % 60}m`;
+}
+
+async function loadLogs() {
+  try {
+    const logs = await LlamaService.getRecentLogs();
+    const term = $("#terminal-logs");
+    if (logs && logs.length > 0) {
+      term.textContent = logs.join("\n");
+      term.scrollTop = term.scrollHeight;
+    }
+  } catch (err) {
+    console.error("Load logs error:", err);
+  }
+}
+
+function setupEvents() {
+  events.serverLog.on((line) => {
+    const term = $("#terminal-logs");
+    term.textContent += (term.textContent ? "\n" : "") + line;
+    term.scrollTop = term.scrollHeight;
+  });
+
+  events.serverStatus.on((st) => {
+    updateServerUI(st);
+  });
+
+  events.downloadProgress.on((p: ProgressReport) => {
+    const overlay = $("#progress-overlay");
+    if (p.status === "completed") {
+      overlay.classList.remove("active");
+      loadBackendStatus();
+      loadModels();
+      return;
+    }
+
+    if (p.status === "downloading" || p.status === "extracting") {
+      overlay.classList.add("active");
+      $("#prog-task").textContent = p.status === "extracting" ? "Extracting..." : "Downloading...";
+      $("#prog-item").textContent = p.itemName;
+      $("#prog-pct").textContent = `${p.percent.toFixed(0)}%`;
+      $("#prog-fill").style.width = `${p.percent}%`;
+      $("#prog-speed").textContent = `${p.speedMBps.toFixed(1)} MB/s`;
+
+      const mbRead = (p.bytesRead / (1024 * 1024)).toFixed(0);
+      const mbTotal = (p.totalBytes / (1024 * 1024)).toFixed(0);
+      $("#prog-bytes").textContent = `${mbRead} / ${mbTotal} MB`;
+    }
+  });
+}
+
+function setupActions() {
+  // GGUF File Import
+  const handleImport = async () => {
+    try {
+      const imported = await LlamaService.importModelDialog();
+      if (!imported) return; // user cancelled dialog
+
+      await loadModels();
+      const quickSelect = $<HTMLSelectElement>("#quick-model-select");
+      quickSelect.value = imported.path;
+      alert(`Imported model: ${imported.name} (${imported.sizeFormatted})`);
+    } catch (err: any) {
+      alert(`Import failed: ${err.message || err}`);
+    }
+  };
+
+  $("#btn-import-gguf-dash")?.addEventListener("click", handleImport);
+  $("#btn-import-gguf-models")?.addEventListener("click", handleImport);
+
+  // Start Server
+  const startHandler = async () => {
+    const quickSelect = $<HTMLSelectElement>("#quick-model-select");
+    const modelPath = quickSelect.value;
+    if (!modelPath) {
+      alert("No model selected. Import, download, or place a .gguf model in models/ first.");
+      return;
+    }
+
+    const cfg = collectConfigFromUI(modelPath);
+
+    try {
+      await LlamaService.startServer(cfg);
+    } catch (err: any) {
+      alert(`Launch error: ${err.message || err}`);
+    }
+  };
+
+  const stopHandler = async () => {
+    try {
+      await LlamaService.stopServer();
+    } catch (err: any) {
+      alert(`Stop error: ${err.message || err}`);
+    }
+  };
+
+  $("#btn-dash-start").addEventListener("click", startHandler);
+  $("#btn-dash-stop").addEventListener("click", stopHandler);
+  $("#btn-quick-toggle").addEventListener("click", () => {
+    if (isServerRunning) stopHandler();
+    else startHandler();
+  });
+
+  $("#btn-dash-restart").addEventListener("click", async () => {
+    if (isServerRunning) await stopHandler();
+    setTimeout(startHandler, 800);
+  });
+
+  $("#btn-refresh-models").addEventListener("click", loadModels);
+
+  $("#btn-save-config").addEventListener("click", async () => {
+    const cfg = collectConfigFromUI();
+    await LlamaService.saveServerConfig(cfg);
+    alert("Configuration & advanced parameters saved successfully.");
+  });
+
+  $("#btn-clear-logs").addEventListener("click", () => {
+    $("#terminal-logs").textContent = "";
+  });
+  $("#btn-copy-logs").addEventListener("click", () => {
+    navigator.clipboard.writeText($("#terminal-logs").textContent || "");
+  });
+
+  // Curated downloads
+  $$("[data-download-url]").forEach((b) => {
+    b.addEventListener("click", async () => {
+      const url = b.getAttribute("data-download-url");
+      const filename = b.getAttribute("data-filename");
+      if (!url || !filename) return;
+
+      b.setAttribute("disabled", "true");
+      try {
+        await LlamaService.downloadModel(url, filename);
+      } catch (err: any) {
+        alert(`Download failed: ${err.message || err}`);
+      } finally {
+        b.removeAttribute("disabled");
+      }
+    });
+  });
+
+  // Hugging Face search
+  $("#btn-hf-search").addEventListener("click", async () => {
+    const repo = $<HTMLInputElement>("#hf-repo-input").value.trim();
+    if (!repo) return;
+
+    const btn = $<HTMLButtonElement>("#btn-hf-search");
+    btn.disabled = true;
+    try {
+      const files = await LlamaService.fetchHFRepo(repo);
+      const container = $("#hf-files-container");
+      const tbody = $("#hf-files-tbody");
+      tbody.innerHTML = "";
+
+      if (!files || files.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="4" style="text-align: center; color: var(--text-low); padding: 14px;">No .gguf files found in repository.</td></tr>`;
+      } else {
+        files.forEach((f) => {
+          const tr = document.createElement("tr");
+          tr.innerHTML = `
+            <td style="font-family: var(--font-mono); font-size: 12px; font-weight: 500;">${f.filename}</td>
+            <td><span class="tag-badge">${f.quant}</span></td>
+            <td style="font-family: var(--font-mono);">${f.sizeFormatted}</td>
+            <td style="text-align: right;">
+              <button class="btn btn-secondary btn-sm btn-hf-dl" data-url="${f.downloadUrl}" data-file="${f.filename}">
+                <i data-lucide="download"></i>
+                <span>Get</span>
+              </button>
+            </td>
+          `;
+          tbody.appendChild(tr);
+        });
+
+        $$(".btn-hf-dl").forEach((dl) => {
+          dl.addEventListener("click", async () => {
+            const u = dl.getAttribute("data-url");
+            const fn = dl.getAttribute("data-file");
+            if (u && fn) {
+              dl.setAttribute("disabled", "true");
+              try {
+                await LlamaService.downloadModel(u, fn);
+              } catch (e: any) {
+                alert(`Error: ${e.message || e}`);
+              } finally {
+                dl.removeAttribute("disabled");
+              }
+            }
+          });
+        });
+      }
+      container.style.display = "block";
+      renderIcons();
+    } catch (err: any) {
+      alert(`Repository lookup failed: ${err.message || err}`);
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  $("#btn-check-releases")?.addEventListener("click", loadReleases);
+}
+
+// GitHub releases
+async function loadReleases() {
+  const tbody = $("#releases-tbody");
+  tbody.innerHTML = `<tr><td colspan="5" style="text-align: center; color: var(--text-low); padding: 18px;">Checking GitHub releases...</td></tr>`;
+
+  try {
+    const releases = await LlamaService.checkReleases();
+    tbody.innerHTML = "";
+
+    if (!releases || releases.length === 0) {
+      tbody.innerHTML = `<tr><td colspan="5" style="text-align: center; color: var(--text-low);">No releases returned.</td></tr>`;
+      return;
+    }
+
+    releases.forEach((r) => {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td style="font-weight: 600; font-family: var(--font-mono); font-size: 12.5px;">${r.tag}</td>
+        <td style="color: var(--text-medium); font-size: 12px;">${r.name || r.tag}</td>
+        <td style="color: var(--text-low); font-size: 11.5px;">${new Date(r.publishedAt).toLocaleDateString()}</td>
+        <td>
+          <select class="form-select" style="width: 150px; padding: 4px 8px; font-size: 11.5px;" id="rel-var-${r.tag}">
+            <option value="cuda" selected>CUDA 12.4 (NVIDIA)</option>
+            <option value="vulkan">Vulkan (Universal)</option>
+            <option value="cpu">CPU (Standard)</option>
+          </select>
+        </td>
+        <td style="text-align: right;">
+          <button class="btn btn-secondary btn-sm btn-install-backend" data-tag="${r.tag}">
+            <i data-lucide="download"></i>
+            <span>${r.isCurrent ? "Re-Install" : "Install"}</span>
+          </button>
+        </td>
+      `;
+      tbody.appendChild(tr);
+    });
+
+    $$(".btn-install-backend").forEach((b) => {
+      b.addEventListener("click", async () => {
+        const tag = b.getAttribute("data-tag");
+        if (!tag) return;
+        const sel = document.querySelector<HTMLSelectElement>(`#rel-var-${tag}`);
+        const v = sel?.value || "cuda";
+
+        b.setAttribute("disabled", "true");
+        try {
+          await LlamaService.downloadBackend(tag, v);
+          alert(`llama.cpp ${tag} (${v.toUpperCase()}) installed.`);
+          loadBackendStatus();
+        } catch (e: any) {
+          alert(`Installation failed: ${e.message || e}`);
+        } finally {
+          b.removeAttribute("disabled");
+        }
+      });
+    });
+
+    renderIcons();
+  } catch (err: any) {
+    tbody.innerHTML = `<tr><td colspan="5" style="text-align: center; color: var(--status-red);">Failed to fetch releases: ${err.message || err}</td></tr>`;
+  }
+}
+
+// Inline Test Prompt on Dashboard
+function setupInlineTest() {
+  const input = $<HTMLInputElement>("#dash-test-input");
+  const btn = $<HTMLButtonElement>("#btn-dash-test-send");
+  const output = $("#dash-test-output");
+
+  btn.addEventListener("click", async () => {
+    const prompt = input.value.trim();
+    if (!prompt) return;
+
+    if (!isServerRunning) {
+      alert("Please start the server first to run a test prompt.");
+      return;
+    }
+
+    btn.disabled = true;
+    output.style.display = "block";
+    output.textContent = "Processing prompt...";
+
+    try {
+      const res = await LlamaService.sendChat([{ role: "user", content: prompt }], 0.7);
+      output.textContent = res;
+    } catch (e: any) {
+      output.textContent = `Error: ${e.message || e}`;
+    } finally {
+      btn.disabled = false;
+    }
+  });
+}
+
+// Settings Management
+async function loadSettings() {
+  try {
+    const s = await LlamaService.getSettings();
+    const modelsInput = document.querySelector<HTMLInputElement>("#settings-models-dir");
+    if (modelsInput) modelsInput.value = s.modelsDir || "";
+
+    const appDataInput = document.querySelector<HTMLInputElement>("#settings-appdata-dir");
+    if (appDataInput) appDataInput.value = s.appDataDir || "";
+
+    const backendTag = document.querySelector<HTMLElement>("#settings-current-backend-tag");
+    if (backendTag) {
+      backendTag.textContent = (s.activeBackend || "cuda").toUpperCase();
+    }
+
+    const rad = document.querySelector<HTMLInputElement>(`input[name="opt-backend"][value="${s.activeBackend}"]`);
+    if (rad) rad.checked = true;
+
+    const defSelect = document.querySelector<HTMLSelectElement>("#settings-default-model-select");
+    if (defSelect && s.defaultModel) {
+      defSelect.value = s.defaultModel;
+    }
+  } catch (err) {
+    console.error("Load settings error:", err);
+  }
+}
+
+function setupSettings() {
+  // Browse Models Dir
+  $("#btn-browse-models-dir")?.addEventListener("click", async () => {
+    try {
+      const selected = await LlamaService.selectFolderDialog("Select Models Folder");
+      if (selected) {
+        await LlamaService.setModelsDir(selected);
+        const modelsInput = document.querySelector<HTMLInputElement>("#settings-models-dir");
+        if (modelsInput) modelsInput.value = selected;
+        await loadModels();
+      }
+    } catch (err: any) {
+      alert(`Failed to set models directory: ${err.message || err}`);
+    }
+  });
+
+  // Open Models Dir in Explorer
+  $("#btn-open-models-dir")?.addEventListener("click", async () => {
+    const dir = document.querySelector<HTMLInputElement>("#settings-models-dir")?.value || "";
+    await LlamaService.openFolderInExplorer(dir);
+  });
+
+  // Browse App Data Dir
+  $("#btn-browse-appdata-dir")?.addEventListener("click", async () => {
+    try {
+      const selected = await LlamaService.selectFolderDialog("Select Application Data Folder");
+      if (selected) {
+        await LlamaService.setAppDataDir(selected);
+        const appDataInput = document.querySelector<HTMLInputElement>("#settings-appdata-dir");
+        if (appDataInput) appDataInput.value = selected;
+        await loadBackendStatus();
+      }
+    } catch (err: any) {
+      alert(`Failed to set app data directory: ${err.message || err}`);
+    }
+  });
+
+  // Open App Data Dir in Explorer
+  $("#btn-open-appdata-dir")?.addEventListener("click", async () => {
+    const dir = document.querySelector<HTMLInputElement>("#settings-appdata-dir")?.value || "";
+    await LlamaService.openFolderInExplorer(dir);
+  });
+
+  // Default model change
+  $("#settings-default-model-select")?.addEventListener("change", async () => {
+    const defSelect = document.querySelector<HTMLSelectElement>("#settings-default-model-select");
+    if (!defSelect) return;
+    const s = await LlamaService.getSettings();
+    s.defaultModel = defSelect.value;
+    await LlamaService.saveSettings(s);
+  });
+
+  // Switch Backend button
+  $("#btn-switch-backend")?.addEventListener("click", async () => {
+    const checked = document.querySelector<HTMLInputElement>('input[name="opt-backend"]:checked');
+    if (!checked) return;
+    const variant = checked.value; // "cuda", "vulkan", "cpu"
+
+    const btn = document.querySelector<HTMLButtonElement>("#btn-switch-backend");
+    if (btn) btn.disabled = true;
+
+    try {
+      if (isServerRunning) {
+        if (!confirm("The server is currently running. Switching backend will stop the current server. Proceed?")) {
+          if (btn) btn.disabled = false;
+          return;
+        }
+        await LlamaService.stopServer();
+      }
+
+      await LlamaService.switchBackend(variant);
+      alert(`Backend switched to ${variant.toUpperCase()} successfully.`);
+      await loadBackendStatus();
+      await loadSettings();
+    } catch (err: any) {
+      alert(`Backend switch failed: ${err.message || err}`);
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  });
+}
+
+// Backend Troubleshooting & Diagnostics
+function setupTroubleshoot() {
+  const modal = document.querySelector<HTMLElement>("#modal-troubleshoot");
+  const btnClose = document.querySelector<HTMLElement>("#btn-close-troubleshoot-modal");
+  const btnRerun = document.querySelector<HTMLElement>("#btn-rerun-diagnostics");
+  const btnRepair = document.querySelector<HTMLElement>("#btn-repair-backend");
+  const btnKill = document.querySelector<HTMLElement>("#btn-kill-zombies");
+  const list = document.querySelector<HTMLElement>("#diag-items-list");
+  const summary = document.querySelector<HTMLElement>("#diag-summary-text");
+
+  function openModal() {
+    if (modal) modal.classList.add("open");
+    runScan();
+  }
+
+  function closeModal() {
+    if (modal) modal.classList.remove("open");
+  }
+
+  document.querySelectorAll(".btn-open-troubleshoot").forEach((b) => {
+    b.addEventListener("click", openModal);
+  });
+
+  btnClose?.addEventListener("click", closeModal);
+
+  async function runScan() {
+    if (!list || !summary) return;
+    summary.textContent = "Scanning backend executable, runtime DLLs, ports, and permissions...";
+    list.innerHTML = `<div style="text-align: center; color: var(--text-low); padding: 18px;">Running diagnostics...</div>`;
+
+    try {
+      const report = await LlamaService.runDiagnostics();
+      list.innerHTML = "";
+
+      if (report.healthy && report.issuesCount === 0) {
+        summary.innerHTML = `<span style="color: #4ade80; font-weight: 600;">All diagnostic checks passed.</span> Backend is healthy and ready.`;
+      } else {
+        summary.innerHTML = `<span style="color: #f87171; font-weight: 600;">Found ${report.issuesCount} issue(s).</span> Review items below or click 'Auto-Repair Backend'.`;
+      }
+
+      report.items.forEach((it) => {
+        const itemDiv = document.createElement("div");
+        itemDiv.className = `diag-item status-${it.status}`;
+
+        const badgeClass = it.status === "ok" ? "ok" : it.status === "warning" ? "warning" : "error";
+        const badgeText = it.status === "ok" ? "PASSED" : it.status === "warning" ? "WARNING" : "ERROR";
+
+        itemDiv.innerHTML = `
+          <div class="diag-item-content">
+            <div class="diag-item-header">
+              <span class="diag-item-title">${it.title}</span>
+              <span class="diag-badge ${badgeClass}">${badgeText}</span>
+            </div>
+            <div class="diag-item-msg">${it.message}</div>
+          </div>
+        `;
+        list.appendChild(itemDiv);
+      });
+    } catch (err: any) {
+      summary.textContent = `Diagnostic scan failed: ${err.message || err}`;
+    }
+  }
+
+  btnRerun?.addEventListener("click", runScan);
+
+  btnKill?.addEventListener("click", async () => {
+    try {
+      await LlamaService.killZombieServers();
+      alert("Sent termination signal to lingering llama-server processes.");
+      await runScan();
+      await loadServerStatus();
+    } catch (err: any) {
+      alert(`Error: ${err.message || err}`);
+    }
+  });
+
+  btnRepair?.addEventListener("click", async () => {
+    if (isServerRunning) {
+      if (!confirm("Server is running. Auto-repair will stop the server and reinstall. Proceed?")) return;
+      await LlamaService.stopServer();
+    }
+
+    try {
+      const btn = btnRepair as HTMLButtonElement;
+      btn.disabled = true;
+      await LlamaService.repairBackend("reinstall");
+      alert("Backend re-download and repair completed successfully.");
+      await loadBackendStatus();
+      await runScan();
+    } catch (err: any) {
+      alert(`Auto-repair failed: ${err.message || err}`);
+    } finally {
+      if (btnRepair) (btnRepair as HTMLButtonElement).disabled = false;
+    }
+  });
+}
+
+// Chat Playground with Branching Tree and Persona Switching
+function setupChat() {
+  const form = $<HTMLFormElement>("#chat-form");
+  const input = $<HTMLInputElement>("#chat-input");
+  const container = $("#chat-messages");
+  const threadsContainer = $("#chat-threads-list");
+  const personaSelect = $<HTMLSelectElement>("#chat-persona-select");
+  const sessionTitle = $("#chat-session-title");
+  const btnNewThread = $("#btn-new-thread");
+  const btnClearChat = $("#btn-clear-chat");
+  const btnNewPersona = $("#btn-new-persona");
+  const modalPersona = $("#modal-persona");
+  const btnCloseModal = $("#btn-close-persona-modal");
+  const btnCancelPersona = $("#btn-cancel-persona");
+  const btnSavePersona = $("#btn-save-persona");
+
+  let sessions = loadAllSessions();
+  let currentSessionId = getActiveSessionId();
+  let currentSession: ChatSession;
+
+  if (sessions.length === 0 || !currentSessionId) {
+    currentSession = createNewSession("general");
+    sessions = [currentSession];
+    currentSessionId = currentSession.id;
+  } else {
+    const found = sessions.find((s) => s.id === currentSessionId);
+    if (found) {
+      currentSession = found;
+    } else {
+      currentSession = sessions[0]!;
+      currentSessionId = currentSession.id;
+      setActiveSessionId(currentSessionId);
+    }
+  }
+
+  // Populate persona selector
+  function renderPersonaOptions() {
+    personaSelect.innerHTML = "";
+    const personas = getPersonas();
+    personas.forEach((p) => {
+      const opt = document.createElement("option");
+      opt.value = p.id;
+      opt.textContent = `${p.name} ${p.isCustom ? "(Custom)" : ""}`;
+      personaSelect.appendChild(opt);
+    });
+    personaSelect.value = currentSession.personaId || "general";
+  }
+
+  personaSelect.addEventListener("change", () => {
+    currentSession.personaId = personaSelect.value;
+    saveSession(currentSession);
+  });
+
+  // Modal handlers
+  function openPersonaModal() {
+    $<HTMLInputElement>("#persona-name-input").value = "";
+    $<HTMLInputElement>("#persona-desc-input").value = "";
+    $<HTMLTextAreaElement>("#persona-prompt-input").value = "";
+    modalPersona.classList.add("open");
+  }
+
+  function closePersonaModal() {
+    modalPersona.classList.remove("open");
+  }
+
+  btnNewPersona.addEventListener("click", openPersonaModal);
+  btnCloseModal.addEventListener("click", closePersonaModal);
+  btnCancelPersona.addEventListener("click", closePersonaModal);
+
+  btnSavePersona.addEventListener("click", () => {
+    const name = $<HTMLInputElement>("#persona-name-input").value.trim();
+    const tagline = $<HTMLInputElement>("#persona-desc-input").value.trim();
+    const systemPrompt = $<HTMLTextAreaElement>("#persona-prompt-input").value.trim();
+
+    if (!name || !systemPrompt) {
+      alert("Please provide both a Persona Name and a System Prompt.");
+      return;
+    }
+
+    const newPersona: Persona = {
+      id: "persona_" + Date.now(),
+      name,
+      tagline: tagline || "Custom Assistant Persona",
+      systemPrompt,
+      isCustom: true,
+    };
+
+    saveCustomPersona(newPersona);
+    renderPersonaOptions();
+    personaSelect.value = newPersona.id;
+    currentSession.personaId = newPersona.id;
+    saveSession(currentSession);
+    closePersonaModal();
+  });
+
+  // Render session list
+  function renderSessions() {
+    threadsContainer.innerHTML = "";
+    sessions = loadAllSessions();
+    if (sessions.length === 0) {
+      currentSession = createNewSession();
+      sessions = [currentSession];
+      currentSessionId = currentSession.id;
+    }
+
+    sessions.forEach((s) => {
+      const item = document.createElement("div");
+      item.className = `thread-item ${s.id === currentSessionId ? "active" : ""}`;
+
+      const titleSpan = document.createElement("span");
+      titleSpan.className = "thread-title";
+      titleSpan.textContent = s.title || "Untitled Chat";
+
+      const delBtn = document.createElement("button");
+      delBtn.className = "thread-del-btn";
+      delBtn.title = "Delete conversation";
+      delBtn.innerHTML = `<i data-lucide="trash-2"></i>`;
+
+      delBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (confirm("Delete this conversation thread?")) {
+          deleteSession(s.id);
+          sessions = loadAllSessions();
+          currentSessionId = getActiveSessionId();
+          if (!currentSessionId && sessions.length > 0 && sessions[0]) {
+            currentSessionId = sessions[0].id;
+            setActiveSessionId(currentSessionId);
+          } else if (sessions.length === 0) {
+            const fresh = createNewSession();
+            currentSessionId = fresh.id;
+            sessions = [fresh];
+          }
+          currentSession = sessions.find((x) => x.id === currentSessionId)!;
+          renderSessions();
+          renderPersonaOptions();
+          renderStage();
+        }
+      });
+
+      item.appendChild(titleSpan);
+      item.appendChild(delBtn);
+
+      item.addEventListener("click", () => {
+        if (currentSessionId === s.id) return;
+        currentSessionId = s.id;
+        setActiveSessionId(s.id);
+        currentSession = s;
+        renderSessions();
+        renderPersonaOptions();
+        renderStage();
+      });
+
+      threadsContainer.appendChild(item);
+    });
+
+    renderIcons();
+  }
+
+  // Create new thread
+  btnNewThread.addEventListener("click", () => {
+    currentSession = createNewSession(personaSelect.value || "general");
+    currentSessionId = currentSession.id;
+    renderSessions();
+    renderPersonaOptions();
+    renderStage();
+  });
+
+  // Clear current thread messages
+  btnClearChat.addEventListener("click", () => {
+    if (confirm("Clear all messages in the active thread?")) {
+      currentSession.nodes = {};
+      currentSession.rootNodeId = null;
+      currentSession.activeNodeId = null;
+      currentSession.title = "New Conversation";
+      saveSession(currentSession);
+      renderSessions();
+      renderStage();
+    }
+  });
+
+  // Render stage (chat history tree path)
+  function renderStage() {
+    sessionTitle.textContent = currentSession.title || "Chat Playground";
+    container.innerHTML = "";
+
+    const path = getActiveConversationPath(currentSession);
+
+    if (path.length === 0) {
+      const emptyDiv = document.createElement("div");
+      emptyDiv.className = "chat-entry assistant";
+      emptyDiv.style.opacity = "0.75";
+      emptyDiv.textContent = "Conversation ready. Select a persona and enter a message below to begin.";
+      container.appendChild(emptyDiv);
+      return;
+    }
+
+    path.forEach((node) => {
+      const wrapper = document.createElement("div");
+      wrapper.className = `chat-entry-wrapper ${node.role}`;
+      wrapper.id = `chat-node-${node.id}`;
+
+      // Content bubble
+      const bubble = document.createElement("div");
+      bubble.className = `chat-entry ${node.role}`;
+      bubble.textContent = node.content;
+      wrapper.appendChild(bubble);
+
+      // Meta bar with sibling pagination & action buttons
+      const metaBar = document.createElement("div");
+      metaBar.className = "entry-meta-bar";
+
+      // Branch pagination pill (< 1/2 >)
+      const siblingInfo = getSiblingInfo(currentSession, node.id);
+      if (siblingInfo.total > 1) {
+        const branchNav = document.createElement("div");
+        branchNav.className = "branch-nav";
+
+        const btnPrev = document.createElement("button");
+        btnPrev.className = "branch-btn";
+        btnPrev.disabled = siblingInfo.index <= 1;
+        btnPrev.innerHTML = `<i data-lucide="chevron-left"></i>`;
+        btnPrev.addEventListener("click", () => {
+          if (siblingInfo.index > 1) {
+            const targetSibling = siblingInfo.siblings[siblingInfo.index - 2];
+            if (targetSibling) {
+              switchSiblingBranch(currentSession, targetSibling.id);
+              renderStage();
+            }
+          }
+        });
+
+        const pillText = document.createElement("span");
+        pillText.textContent = `${siblingInfo.index}/${siblingInfo.total}`;
+
+        const btnNext = document.createElement("button");
+        btnNext.className = "branch-btn";
+        btnNext.disabled = siblingInfo.index >= siblingInfo.total;
+        btnNext.innerHTML = `<i data-lucide="chevron-right"></i>`;
+        btnNext.addEventListener("click", () => {
+          if (siblingInfo.index < siblingInfo.total) {
+            const targetSibling = siblingInfo.siblings[siblingInfo.index];
+            if (targetSibling) {
+              switchSiblingBranch(currentSession, targetSibling.id);
+              renderStage();
+            }
+          }
+        });
+
+        branchNav.appendChild(btnPrev);
+        branchNav.appendChild(pillText);
+        branchNav.appendChild(btnNext);
+        metaBar.appendChild(branchNav);
+      } else {
+        const spacer = document.createElement("span");
+        metaBar.appendChild(spacer);
+      }
+
+      // Actions toolbar
+      const actionsDiv = document.createElement("div");
+      actionsDiv.className = "entry-actions";
+
+      // Copy button
+      const copyBtn = document.createElement("button");
+      copyBtn.className = "entry-action-btn";
+      copyBtn.innerHTML = `<i data-lucide="copy"></i><span>Copy</span>`;
+      copyBtn.addEventListener("click", () => {
+        navigator.clipboard.writeText(node.content);
+        copyBtn.innerHTML = `<i data-lucide="check"></i><span>Copied</span>`;
+        setTimeout(() => {
+          copyBtn.innerHTML = `<i data-lucide="copy"></i><span>Copy</span>`;
+          renderIcons();
+        }, 1500);
+      });
+      actionsDiv.appendChild(copyBtn);
+
+      // User node: Edit button
+      if (node.role === "user") {
+        const editBtn = document.createElement("button");
+        editBtn.className = "entry-action-btn";
+        editBtn.innerHTML = `<i data-lucide="edit-2"></i><span>Edit</span>`;
+        editBtn.addEventListener("click", () => {
+          showInlineEdit(wrapper, bubble, metaBar, node);
+        });
+        actionsDiv.appendChild(editBtn);
+      }
+
+      // Assistant node: Regenerate button
+      if (node.role === "assistant") {
+        const regenBtn = document.createElement("button");
+        regenBtn.className = "entry-action-btn";
+        regenBtn.innerHTML = `<i data-lucide="rotate-ccw"></i><span>Regenerate</span>`;
+        regenBtn.addEventListener("click", () => {
+          executeRegenerate(node);
+        });
+        actionsDiv.appendChild(regenBtn);
+      }
+
+      metaBar.appendChild(actionsDiv);
+      wrapper.appendChild(metaBar);
+      container.appendChild(wrapper);
+    });
+
+    container.scrollTop = container.scrollHeight;
+    renderIcons();
+  }
+
+  // Inline edit handler for user messages
+  function showInlineEdit(wrapper: HTMLElement, bubble: HTMLElement, metaBar: HTMLElement, node: ChatNode) {
+    bubble.style.display = "none";
+    metaBar.style.display = "none";
+
+    const editForm = document.createElement("form");
+    editForm.className = "inline-edit-form";
+
+    const textarea = document.createElement("textarea");
+    textarea.className = "inline-edit-textarea";
+    textarea.value = node.content;
+
+    const actions = document.createElement("div");
+    actions.className = "inline-edit-actions";
+
+    const btnCancel = document.createElement("button");
+    btnCancel.type = "button";
+    btnCancel.className = "btn btn-secondary btn-sm";
+    btnCancel.textContent = "Cancel";
+    btnCancel.addEventListener("click", () => {
+      editForm.remove();
+      bubble.style.display = "block";
+      metaBar.style.display = "flex";
+    });
+
+    const btnSave = document.createElement("button");
+    btnSave.type = "submit";
+    btnSave.className = "btn btn-primary btn-sm";
+    btnSave.textContent = "Save & Branch";
+
+    actions.appendChild(btnCancel);
+    actions.appendChild(btnSave);
+    editForm.appendChild(textarea);
+    editForm.appendChild(actions);
+
+    editForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const updatedText = textarea.value.trim();
+      if (!updatedText) return;
+
+      editForm.remove();
+      editMessageNode(currentSession, node.id, updatedText);
+      renderSessions();
+      renderStage();
+
+      await triggerAssistantGeneration();
+    });
+
+    wrapper.insertBefore(editForm, metaBar);
+    textarea.focus();
+    textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+  }
+
+  // Regenerate assistant response
+  async function executeRegenerate(assistantNode: ChatNode) {
+    if (!isServerRunning) {
+      alert("Start the server on the Overview tab before generating responses.");
+      return;
+    }
+    regenerateAssistantNode(currentSession, assistantNode.id);
+    renderStage();
+    await triggerAssistantGeneration();
+  }
+
+  // Trigger inference generation for the current active branch
+  async function triggerAssistantGeneration() {
+    if (!isServerRunning) {
+      alert("Start the server on the Overview tab before testing in the playground.");
+      return;
+    }
+
+    const path = getActiveConversationPath(currentSession);
+    let activeNode = path.length > 0 ? path[path.length - 1] : undefined;
+
+    let targetNode: ChatNode;
+    if (!activeNode || activeNode.role === "user") {
+      targetNode = addMessageToSession(currentSession, "assistant", "Thinking...");
+      renderStage();
+    } else {
+      targetNode = activeNode;
+      targetNode.content = "Thinking...";
+      saveSession(currentSession);
+      renderStage();
+    }
+
+    const messagesToSend = getActiveConversationPath(currentSession)
+      .filter((n) => n.id !== targetNode.id)
+      .map((n) => ({ role: n.role as "user" | "assistant", content: n.content }));
+
+    // Inject persona system prompt
+    const persona = getPersonaById(currentSession.personaId);
+    if (persona && persona.systemPrompt) {
+      messagesToSend.unshift({ role: "system" as any, content: persona.systemPrompt });
+    }
+
+    try {
+      const tempVal = Number($<HTMLInputElement>("#cfg-temp")?.value || 0.7);
+      const routerSelect = document.querySelector<HTMLSelectElement>("#chat-router-model-select");
+      const routerCheck = document.querySelector<HTMLInputElement>("#cfg-router-mode");
+      const modelArg = routerCheck && routerCheck.checked && routerSelect && routerSelect.value ? routerSelect.value : "";
+
+      const reply = modelArg
+        ? await LlamaService.sendChatWithModel(modelArg, messagesToSend, tempVal)
+        : await LlamaService.sendChat(messagesToSend, tempVal);
+
+      targetNode.content = reply;
+      saveSession(currentSession);
+      renderSessions();
+      renderStage();
+    } catch (err: any) {
+      targetNode.content = `Error: ${err.message || err}`;
+      saveSession(currentSession);
+      renderStage();
+    }
+
+  }
+
+  // Handle new message submit from bottom bar
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const text = input.value.trim();
+    if (!text) return;
+
+    if (!isServerRunning) {
+      alert("Start the server on the Overview tab before testing in the playground.");
+      return;
+    }
+
+    input.value = "";
+    addMessageToSession(currentSession, "user", text);
+    renderSessions();
+    renderStage();
+
+    await triggerAssistantGeneration();
+  });
+
+  // Initial load
+  renderPersonaOptions();
+  renderSessions();
+  renderStage();
+}
+
+
+window.addEventListener("DOMContentLoaded", init);
