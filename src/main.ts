@@ -204,18 +204,19 @@ marked.use({
   renderer: {
     code({ text, lang }) {
       const language = (lang || "").toLowerCase().trim();
+      const cleanText = (text || "").replace(/^\s*[\r\n]+|[\r\n]+\s*$/g, "");
       let highlighted = "";
       if (language && hljs.getLanguage(language)) {
         try {
-          highlighted = hljs.highlight(text, { language }).value;
+          highlighted = hljs.highlight(cleanText, { language }).value;
         } catch {
-          highlighted = escapeHtml(text);
+          highlighted = escapeHtml(cleanText);
         }
       } else {
         try {
-          highlighted = hljs.highlightAuto(text).value;
+          highlighted = hljs.highlightAuto(cleanText).value;
         } catch {
-          highlighted = escapeHtml(text);
+          highlighted = escapeHtml(cleanText);
         }
       }
 
@@ -223,22 +224,7 @@ marked.use({
       const ext = getExtensionForLang(displayLang);
       const defaultFilename = `snippet.${ext}`;
 
-      return `<div class="code-block-container" data-lang="${displayLang}">
-  <div class="code-block-header">
-    <span class="code-block-lang">${displayLang}</span>
-    <div class="code-block-actions">
-      <button type="button" class="btn-code-copy" title="Copy code snippet">
-        <i data-lucide="copy"></i>
-        <span>Copy</span>
-      </button>
-      <button type="button" class="btn-code-save" data-filename="${defaultFilename}" title="Save code to file">
-        <i data-lucide="download"></i>
-        <span>Save</span>
-      </button>
-    </div>
-  </div>
-  <pre><code class="hljs ${language ? `language-${language}` : ""}">${highlighted}</code></pre>
-</div>`;
+      return `<div class="code-block-container" data-lang="${displayLang}"><div class="code-block-header"><span class="code-block-lang">${displayLang}</span><div class="code-block-actions"><button type="button" class="btn-code-copy" title="Copy code snippet"><i data-lucide="copy"></i><span>Copy</span></button><button type="button" class="btn-code-save" data-filename="${defaultFilename}" title="Save code to file"><i data-lucide="download"></i><span>Save</span></button></div></div><pre><code class="hljs ${language ? `language-${language}` : ""}">${highlighted}</code></pre></div>`;
     },
   },
 });

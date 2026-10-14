@@ -1145,7 +1145,16 @@ table.data-table tr:hover td {
   font-size: 13.5px;
   line-height: 1.55;
   word-break: break-word;
-  white-space: pre-wrap;
+}
+
+.chat-entry > *:first-child,
+.chat-answer-body > *:first-child {
+  margin-top: 0 !important;
+}
+
+.chat-entry > *:last-child,
+.chat-answer-body > *:last-child {
+  margin-bottom: 0 !important;
 }
 
 .chat-entry.user {
@@ -1433,7 +1442,7 @@ table.data-table tr:hover td {
 
 .code-block-container pre {
   margin: 0 !important;
-  padding: 12px 14px !important;
+  padding: 10px 14px 12px 14px !important;
   background: #0d1117 !important;
   border: none !important;
   border-radius: 0 !important;
@@ -1445,9 +1454,11 @@ table.data-table tr:hover td {
 
 .code-block-container pre code.hljs {
   padding: 0 !important;
+  margin: 0 !important;
   background: transparent !important;
   border: none !important;
   font-family: var(--font-mono);
+  display: block;
 }
 
 /* Branching Pagination & Actions Toolbar */
