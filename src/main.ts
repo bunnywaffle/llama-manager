@@ -28,6 +28,10 @@ import {
   Check,
   X,
   Layers,
+  Send,
+  Bot,
+  User,
+  Sparkles,
 } from "lucide";
 import {
   LlamaService,
@@ -91,6 +95,10 @@ function renderIcons() {
       Check,
       X,
       Layers,
+      Send,
+      Bot,
+      User,
+      Sparkles,
     },
   });
 }
@@ -593,7 +601,11 @@ function updateServerUI(st: ServerStatus) {
     dashModel.textContent = st.activeModel || "Loaded";
     dashPort.textContent = `${st.host}:${st.port}`;
     const chatBadge = $("#chat-active-model-badge");
-    if (chatBadge) chatBadge.textContent = st.activeModel ? st.activeModel.split("/").pop()!.split("\\").pop()! : "Active";
+    if (chatBadge) {
+      const modelName = st.activeModel ? st.activeModel.split("/").pop()!.split("\\").pop()! : "Active";
+      chatBadge.innerHTML = `<i data-lucide="cpu"></i><span>${modelName}</span>`;
+      renderIcons();
+    }
   } else {
     pill.className = "status-indicator";
     pillText.textContent = st.errorMsg ? "Crashed / Error" : "Stopped";
@@ -611,7 +623,10 @@ function updateServerUI(st: ServerStatus) {
       dashUptime.textContent = "Not running";
     }
     const chatBadge = $("#chat-active-model-badge");
-    if (chatBadge) chatBadge.textContent = "Offline";
+    if (chatBadge) {
+      chatBadge.innerHTML = `<i data-lucide="cpu"></i><span>Offline</span>`;
+      renderIcons();
+    }
   }
 }
 
@@ -1422,7 +1437,7 @@ function setupTroubleshoot() {
 // Chat Playground with Branching Tree and Persona Switching
 function setupChat() {
   const form = $<HTMLFormElement>("#chat-form");
-  const input = $<HTMLInputElement>("#chat-input");
+  const input = $<HTMLTextAreaElement>("#chat-input");
   const container = $("#chat-messages");
   const threadsContainer = $("#chat-threads-list");
   const personaSelect = $<HTMLSelectElement>("#chat-persona-select");
@@ -1434,6 +1449,20 @@ function setupChat() {
   const btnCloseModal = $("#btn-close-persona-modal");
   const btnCancelPersona = $("#btn-cancel-persona");
   const btnSavePersona = $("#btn-save-persona");
+
+  // Auto-resize chat input textarea
+  input.addEventListener("input", () => {
+    input.style.height = "auto";
+    input.style.height = `${Math.min(input.scrollHeight, 160)}px`;
+  });
+
+  // Enter to send, Shift+Enter for new line
+  input.addEventListener("keydown", (e: KeyboardEvent) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      form.dispatchEvent(new Event("submit", { cancelable: true }));
+    }
+  });
 
   let sessions = loadAllSessions();
   let currentSessionId = getActiveSessionId();
@@ -1528,6 +1557,10 @@ function setupChat() {
       const item = document.createElement("div");
       item.className = `thread-item ${s.id === currentSessionId ? "active" : ""}`;
 
+      const icon = document.createElement("i");
+      icon.setAttribute("data-lucide", "message-square");
+      icon.className = "thread-icon";
+
       const titleSpan = document.createElement("span");
       titleSpan.className = "thread-title";
       titleSpan.textContent = s.title || "Untitled Chat";
@@ -1565,6 +1598,7 @@ function setupChat() {
         }
       });
 
+      item.appendChild(icon);
       item.appendChild(titleSpan);
       item.appendChild(delBtn);
 
@@ -1622,10 +1656,14 @@ function setupChat() {
 
     if (path.length === 0) {
       const emptyDiv = document.createElement("div");
-      emptyDiv.className = "chat-entry assistant";
-      emptyDiv.style.opacity = "0.75";
-      emptyDiv.textContent = "Conversation ready. Select a persona and enter a message below to begin.";
+      emptyDiv.className = "chat-empty-state";
+      emptyDiv.innerHTML = `
+        <div class="chat-empty-icon"><i data-lucide="sparkles"></i></div>
+        <div class="chat-empty-title">Playground Ready</div>
+        <div class="chat-empty-desc">Send a prompt below to interact with your loaded model in real time. Branch conversations anytime with inline edit or regenerate.</div>
+      `;
       container.appendChild(emptyDiv);
+      renderIcons();
       return;
     }
 
@@ -1633,6 +1671,16 @@ function setupChat() {
       const wrapper = document.createElement("div");
       wrapper.className = `chat-entry-wrapper ${node.role}`;
       wrapper.id = `chat-node-${node.id}`;
+
+      // Sender author header
+      const header = document.createElement("div");
+      header.className = `entry-header ${node.role}`;
+      if (node.role === "user") {
+        header.innerHTML = `<i data-lucide="user"></i><span>You</span>`;
+      } else {
+        header.innerHTML = `<i data-lucide="bot"></i><span>Assistant</span>`;
+      }
+      wrapper.appendChild(header);
 
       // Content bubble
       const bubble = document.createElement("div");
@@ -1644,7 +1692,7 @@ function setupChat() {
       const metaBar = document.createElement("div");
       metaBar.className = "entry-meta-bar";
 
-      // Branch pagination pill (< 1/2 >)
+      // Branch pagination pill (< 1 / 2 >)
       const siblingInfo = getSiblingInfo(currentSession, node.id);
       if (siblingInfo.total > 1) {
         const branchNav = document.createElement("div");
@@ -1653,6 +1701,7 @@ function setupChat() {
         const btnPrev = document.createElement("button");
         btnPrev.className = "branch-btn";
         btnPrev.disabled = siblingInfo.index <= 1;
+        btnPrev.title = "Previous variation";
         btnPrev.innerHTML = `<i data-lucide="chevron-left"></i>`;
         btnPrev.addEventListener("click", () => {
           if (siblingInfo.index > 1) {
@@ -1665,11 +1714,13 @@ function setupChat() {
         });
 
         const pillText = document.createElement("span");
-        pillText.textContent = `${siblingInfo.index}/${siblingInfo.total}`;
+        pillText.className = "branch-counter";
+        pillText.textContent = `${siblingInfo.index} / ${siblingInfo.total}`;
 
         const btnNext = document.createElement("button");
         btnNext.className = "branch-btn";
         btnNext.disabled = siblingInfo.index >= siblingInfo.total;
+        btnNext.title = "Next variation";
         btnNext.innerHTML = `<i data-lucide="chevron-right"></i>`;
         btnNext.addEventListener("click", () => {
           if (siblingInfo.index < siblingInfo.total) {
@@ -1697,10 +1748,12 @@ function setupChat() {
       // Copy button
       const copyBtn = document.createElement("button");
       copyBtn.className = "entry-action-btn";
+      copyBtn.title = "Copy message";
       copyBtn.innerHTML = `<i data-lucide="copy"></i><span>Copy</span>`;
       copyBtn.addEventListener("click", () => {
         navigator.clipboard.writeText(node.content);
         copyBtn.innerHTML = `<i data-lucide="check"></i><span>Copied</span>`;
+        renderIcons();
         setTimeout(() => {
           copyBtn.innerHTML = `<i data-lucide="copy"></i><span>Copy</span>`;
           renderIcons();
@@ -1712,6 +1765,7 @@ function setupChat() {
       if (node.role === "user") {
         const editBtn = document.createElement("button");
         editBtn.className = "entry-action-btn";
+        editBtn.title = "Edit message & branch";
         editBtn.innerHTML = `<i data-lucide="edit-2"></i><span>Edit</span>`;
         editBtn.addEventListener("click", () => {
           showInlineEdit(wrapper, bubble, metaBar, node);
@@ -1723,6 +1777,7 @@ function setupChat() {
       if (node.role === "assistant") {
         const regenBtn = document.createElement("button");
         regenBtn.className = "entry-action-btn";
+        regenBtn.title = "Regenerate alternative response";
         regenBtn.innerHTML = `<i data-lucide="rotate-ccw"></i><span>Regenerate</span>`;
         regenBtn.addEventListener("click", () => {
           executeRegenerate(node);
@@ -1741,6 +1796,8 @@ function setupChat() {
 
   // Inline edit handler for user messages
   function showInlineEdit(wrapper: HTMLElement, bubble: HTMLElement, metaBar: HTMLElement, node: ChatNode) {
+    const header = wrapper.querySelector<HTMLElement>(".entry-header");
+    if (header) header.style.display = "none";
     bubble.style.display = "none";
     metaBar.style.display = "none";
 
@@ -1751,6 +1808,18 @@ function setupChat() {
     textarea.className = "inline-edit-textarea";
     textarea.value = node.content;
 
+    textarea.addEventListener("input", () => {
+      textarea.style.height = "auto";
+      textarea.style.height = `${Math.min(textarea.scrollHeight, 250)}px`;
+    });
+
+    textarea.addEventListener("keydown", (e: KeyboardEvent) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        editForm.dispatchEvent(new Event("submit", { cancelable: true }));
+      }
+    });
+
     const actions = document.createElement("div");
     actions.className = "inline-edit-actions";
 
@@ -1760,6 +1829,7 @@ function setupChat() {
     btnCancel.textContent = "Cancel";
     btnCancel.addEventListener("click", () => {
       editForm.remove();
+      if (header) header.style.display = "inline-flex";
       bubble.style.display = "block";
       metaBar.style.display = "flex";
     });
@@ -1868,6 +1938,7 @@ function setupChat() {
     }
 
     input.value = "";
+    input.style.height = "auto";
     addMessageToSession(currentSession, "user", text);
     renderSessions();
     renderStage();
