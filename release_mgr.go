@@ -1,17 +1,65 @@
 package main
 
 import (
+	"archive/tar"
 	"archive/zip"
+	"compress/gzip"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
 )
+
+// getServerExeName returns the binary name for the current operating system.
+func getServerExeName() string {
+	if runtime.GOOS == "windows" {
+		return "llama-server.exe"
+	}
+	return "llama-server"
+}
+
+// isAssetCompatibleWithHost ensures only releases built for the detected OS and architecture are downloaded.
+func isAssetCompatibleWithHost(assetName string) bool {
+	name := strings.ToLower(assetName)
+	switch runtime.GOOS {
+	case "windows":
+		if !strings.Contains(name, "win") {
+			return false
+		}
+		if runtime.GOARCH == "arm64" {
+			return strings.Contains(name, "arm64")
+		}
+		// x64 / amd64 Windows: reject arm64, linux, macos, android, ubuntu
+		return (strings.Contains(name, "x64") || strings.Contains(name, "win")) &&
+			!strings.Contains(name, "arm64") &&
+			!strings.Contains(name, "ubuntu") &&
+			!strings.Contains(name, "macos")
+	case "linux":
+		if !strings.Contains(name, "ubuntu") && !strings.Contains(name, "linux") {
+			return false
+		}
+		if runtime.GOARCH == "arm64" {
+			return strings.Contains(name, "arm64")
+		}
+		return strings.Contains(name, "x64") && !strings.Contains(name, "arm64")
+	case "darwin":
+		if !strings.Contains(name, "macos") {
+			return false
+		}
+		if runtime.GOARCH == "arm64" {
+			return strings.Contains(name, "arm64")
+		}
+		return strings.Contains(name, "x64")
+	default:
+		return strings.Contains(name, runtime.GOOS)
+	}
+}
 
 // ReleaseAsset describes a downloadable file in a GitHub release.
 type ReleaseAsset struct {
@@ -79,7 +127,7 @@ func (rm *ReleaseManager) GetInstalledBackend() BackendStatus {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
 
-	serverExe := filepath.Join(rm.binDir, "llama-server.exe")
+	serverExe := filepath.Join(rm.binDir, getServerExeName())
 	versionFile := filepath.Join(rm.binDir, "version.txt")
 
 	status := BackendStatus{
@@ -151,8 +199,8 @@ func (rm *ReleaseManager) CheckReleases() ([]ReleaseInfo, error) {
 		}
 
 		for _, a := range r.Assets {
-			// Filter to Windows assets
-			if strings.Contains(a.Name, "win") && strings.HasSuffix(a.Name, ".zip") {
+			// Strict filter to only assets compatible with current host OS & architecture
+			if isAssetCompatibleWithHost(a.Name) {
 				rel.Assets = append(rel.Assets, ReleaseAsset{
 					Name:        a.Name,
 					Size:        a.Size,
@@ -208,36 +256,51 @@ func (rm *ReleaseManager) DownloadAndInstall(tag, variant string, onProgress fun
 		return fmt.Errorf("release tag %s not found", tag)
 	}
 
-	// Identify primary asset and optional cudart asset
+	// Match primary asset and optional cudart asset
 	var primaryAsset *ReleaseAsset
 	var cudartAsset *ReleaseAsset
 
-	var needle string
-	switch variant {
-	case "cuda":
-		needle = "cuda-12.4-x64"
-	case "vulkan":
-		needle = "vulkan-x64"
-	case "cpu":
-		needle = "cpu-x64"
-	default:
-		needle = "cuda-12.4-x64"
-	}
-
 	for i := range targetRelease.Assets {
 		a := &targetRelease.Assets[i]
-		if strings.HasPrefix(a.Name, "llama-") && strings.Contains(a.Name, needle) {
-			primaryAsset = a
-		} else if strings.HasPrefix(a.Name, "cudart-") && strings.Contains(a.Name, needle) {
-			cudartAsset = a
+		if !isAssetCompatibleWithHost(a.Name) {
+			continue
+		}
+		lower := strings.ToLower(a.Name)
+
+		if strings.HasPrefix(lower, "cudart-") {
+			if variant == "cuda" && (cudartAsset == nil || strings.Contains(lower, "12.4") || strings.Contains(lower, "12")) {
+				cudartAsset = a
+			}
+			continue
+		}
+
+		if !strings.HasPrefix(lower, "llama-") {
+			continue
+		}
+
+		switch variant {
+		case "cuda":
+			if strings.Contains(lower, "cuda") || strings.Contains(lower, "cu12") || strings.Contains(lower, "cu11") {
+				if primaryAsset == nil || strings.Contains(lower, "12.4") {
+					primaryAsset = a
+				}
+			}
+		case "vulkan":
+			if strings.Contains(lower, "vulkan") {
+				primaryAsset = a
+			}
+		case "cpu":
+			if strings.Contains(lower, "cpu") || strings.Contains(lower, "avx2") {
+				primaryAsset = a
+			}
 		}
 	}
 
 	if primaryAsset == nil {
-		// Fallback to any win-x64 zip
+		// Fallback to any host-compatible zip/tar.gz
 		for i := range targetRelease.Assets {
 			a := &targetRelease.Assets[i]
-			if strings.Contains(a.Name, "win") && strings.Contains(a.Name, "x64") {
+			if isAssetCompatibleWithHost(a.Name) && strings.HasPrefix(strings.ToLower(a.Name), "llama-") {
 				primaryAsset = a
 				break
 			}
@@ -245,7 +308,7 @@ func (rm *ReleaseManager) DownloadAndInstall(tag, variant string, onProgress fun
 	}
 
 	if primaryAsset == nil {
-		return fmt.Errorf("no matching binary found for variant %s in release %s", variant, tag)
+		return fmt.Errorf("no matching binary found for %s on %s/%s in release %s", variant, runtime.GOOS, runtime.GOARCH, tag)
 	}
 
 	tempDir := filepath.Join(rm.binDir, "tmp_download")
@@ -253,27 +316,44 @@ func (rm *ReleaseManager) DownloadAndInstall(tag, variant string, onProgress fun
 	_ = os.MkdirAll(tempDir, 0755)
 	defer os.RemoveAll(tempDir)
 
-	// Step 1: Download Primary Llama Binary Zip
-	primaryZip := filepath.Join(tempDir, primaryAsset.Name)
-	if err := rm.downloadFile(primaryAsset.DownloadURL, primaryZip, primaryAsset.Name, primaryAsset.Size, onProgress); err != nil {
+	// Step 1: Download Primary Llama Binary Archive
+	primaryArchive := filepath.Join(tempDir, primaryAsset.Name)
+	if err := rm.downloadFile(primaryAsset.DownloadURL, primaryArchive, primaryAsset.Name, primaryAsset.Size, onProgress); err != nil {
 		return err
 	}
 
 	// Step 2: Download CUDA runtime DLLs if applicable
 	if variant == "cuda" && cudartAsset != nil {
-		cudartZip := filepath.Join(tempDir, cudartAsset.Name)
-		if err := rm.downloadFile(cudartAsset.DownloadURL, cudartZip, cudartAsset.Name, cudartAsset.Size, onProgress); err != nil {
+		cudartArchive := filepath.Join(tempDir, cudartAsset.Name)
+		if err := rm.downloadFile(cudartAsset.DownloadURL, cudartArchive, cudartAsset.Name, cudartAsset.Size, onProgress); err != nil {
 			return err
 		}
 		// Extract cudart
-		if err := rm.extractZip(cudartZip, rm.binDir, onProgress); err != nil {
+		if err := rm.extractArchive(cudartArchive, rm.binDir, onProgress); err != nil {
 			return err
 		}
 	}
 
 	// Step 3: Extract Primary Llama Binaries
-	if err := rm.extractZip(primaryZip, rm.binDir, onProgress); err != nil {
+	if err := rm.extractArchive(primaryArchive, rm.binDir, onProgress); err != nil {
 		return err
+	}
+
+	// Ensure llama-server executable is directly at the root of binDir
+	serverExeName := getServerExeName()
+	serverExe := filepath.Join(rm.binDir, serverExeName)
+	if _, err := os.Stat(serverExe); err != nil {
+		// If nested in a subfolder, locate and move it up to rm.binDir
+		_ = filepath.Walk(rm.binDir, func(path string, info os.FileInfo, err error) error {
+			if err == nil && !info.IsDir() && info.Name() == serverExeName {
+				_ = os.Rename(path, serverExe)
+			}
+			return nil
+		})
+	}
+
+	if runtime.GOOS != "windows" {
+		_ = os.Chmod(serverExe, 0755)
 	}
 
 	// Write version tag and variant
@@ -370,6 +450,17 @@ func (rm *ReleaseManager) downloadFile(url, dst, name string, totalBytes int64, 
 	return nil
 }
 
+func (rm *ReleaseManager) extractArchive(srcArchive, dstDir string, onProgress func(ProgressReport)) error {
+	lower := strings.ToLower(srcArchive)
+	if strings.HasSuffix(lower, ".zip") {
+		return rm.extractZip(srcArchive, dstDir, onProgress)
+	}
+	if strings.HasSuffix(lower, ".tar.gz") || strings.HasSuffix(lower, ".tgz") {
+		return rm.extractTarGz(srcArchive, dstDir, onProgress)
+	}
+	return fmt.Errorf("unsupported archive format: %s", filepath.Base(srcArchive))
+}
+
 func (rm *ReleaseManager) extractZip(srcZip, dstDir string, onProgress func(ProgressReport)) error {
 	r, err := zip.OpenReader(srcZip)
 	if err != nil {
@@ -385,7 +476,6 @@ func (rm *ReleaseManager) extractZip(srcZip, dstDir string, onProgress func(Prog
 	})
 
 	for _, f := range r.File {
-		// Flatten or preserve relative path
 		cleanName := filepath.Clean(f.Name)
 		if strings.HasPrefix(cleanName, "..") {
 			continue
@@ -417,3 +507,60 @@ func (rm *ReleaseManager) extractZip(srcZip, dstDir string, onProgress func(Prog
 
 	return nil
 }
+
+func (rm *ReleaseManager) extractTarGz(srcTarGz, dstDir string, onProgress func(ProgressReport)) error {
+	f, err := os.Open(srcTarGz)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	gzReader, err := gzip.NewReader(f)
+	if err != nil {
+		return err
+	}
+	defer gzReader.Close()
+
+	tarReader := tar.NewReader(gzReader)
+
+	onProgress(ProgressReport{
+		Task:     "download_llama",
+		ItemName: filepath.Base(srcTarGz),
+		Status:   "extracting",
+		Percent:  98,
+	})
+
+	for {
+		header, err := tarReader.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return err
+		}
+
+		cleanName := filepath.Clean(header.Name)
+		if strings.HasPrefix(cleanName, "..") {
+			continue
+		}
+		targetPath := filepath.Join(dstDir, filepath.Base(cleanName))
+
+		if header.Typeflag == tar.TypeDir {
+			continue
+		}
+
+		outFile, err := os.OpenFile(targetPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, os.FileMode(header.Mode))
+		if err != nil {
+			return err
+		}
+
+		if _, err := io.Copy(outFile, tarReader); err != nil {
+			outFile.Close()
+			return err
+		}
+		outFile.Close()
+	}
+
+	return nil
+}
+

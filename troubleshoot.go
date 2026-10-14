@@ -51,12 +51,13 @@ func RunDiagnostics(binDir, modelsDir, variant string, port int, hw HardwareInfo
 	}
 
 	// 1. Executable Integrity Check
-	exePath := filepath.Join(binDir, "llama-server.exe")
+	exeName := getServerExeName()
+	exePath := filepath.Join(binDir, exeName)
 	info, err := os.Stat(exePath)
 	if err != nil {
 		report.Items = append(report.Items, DiagnosticItem{
 			Category:  "executable",
-			Title:     "llama-server.exe Executable",
+			Title:     exeName + " Executable",
 			Status:    "error",
 			Message:   fmt.Sprintf("Binary not found at %s. Please install the backend.", exePath),
 			FixAction: "reinstall",
@@ -64,7 +65,7 @@ func RunDiagnostics(binDir, modelsDir, variant string, port int, hw HardwareInfo
 	} else if info.Size() < 1024*1024 {
 		report.Items = append(report.Items, DiagnosticItem{
 			Category:  "executable",
-			Title:     "llama-server.exe Executable",
+			Title:     exeName + " Executable",
 			Status:    "error",
 			Message:   fmt.Sprintf("Binary file size is only %d bytes (corrupted or truncated).", info.Size()),
 			FixAction: "reinstall",
@@ -72,7 +73,7 @@ func RunDiagnostics(binDir, modelsDir, variant string, port int, hw HardwareInfo
 	} else {
 		report.Items = append(report.Items, DiagnosticItem{
 			Category: "executable",
-			Title:    "llama-server.exe Executable",
+			Title:    exeName + " Executable",
 			Status:   "ok",
 			Message:  fmt.Sprintf("Verified binary exists (%d MB).", info.Size()/(1024*1024)),
 		})
@@ -140,7 +141,8 @@ func RunDiagnostics(binDir, modelsDir, variant string, port int, hw HardwareInfo
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 
-		cmd := exec.CommandContext(ctx, exePath, "--help")
+		cmd := prepareCmd(exec.CommandContext(ctx, exePath, "--help"))
+		cmd.Dir = binDir
 		out, err := cmd.CombinedOutput()
 		if ctx.Err() == context.DeadlineExceeded {
 			report.Items = append(report.Items, DiagnosticItem{
@@ -261,7 +263,7 @@ func RunDiagnostics(binDir, modelsDir, variant string, port int, hw HardwareInfo
 
 // KillZombieProcesses terminates any lingering llama-server.exe processes on Windows.
 func KillZombieProcesses() error {
-	cmd := exec.Command("taskkill", "/F", "/IM", "llama-server.exe", "/T")
+	cmd := prepareCmd(exec.Command("taskkill", "/F", "/IM", "llama-server.exe", "/T"))
 	_ = cmd.Run()
 	return nil
 }

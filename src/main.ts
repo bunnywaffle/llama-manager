@@ -37,6 +37,7 @@ import {
   type ServerConfig,
   type AppSettings,
 } from "./mygo";
+import { showToast, showConfirm, initNativeContextMenu } from "./ui_native";
 import {
   type ChatNode,
   type ChatSession,
@@ -107,6 +108,7 @@ async function init() {
   setupChat();
   setupActions();
   setupInlineTest();
+  initNativeContextMenu();
   setupSettings();
   setupTroubleshoot();
 
@@ -309,8 +311,15 @@ async function loadModels() {
       b.addEventListener("click", async () => {
         const name = b.getAttribute("data-name");
         if (!name) return;
-        if (confirm(`Delete local model ${name}?`)) {
+        const confirmed = await showConfirm(
+          "Delete Local Model",
+          `Are you sure you want to permanently delete "${name}" from disk?`,
+          "Delete Model",
+          true
+        );
+        if (confirmed) {
           await LlamaService.deleteModel(name);
+          showToast(`Deleted model ${name}`, "info");
           loadModels();
         }
       });
@@ -562,9 +571,9 @@ function setupActions() {
       await loadModels();
       const quickSelect = $<HTMLSelectElement>("#quick-model-select");
       quickSelect.value = imported.path;
-      alert(`Imported model: ${imported.name} (${imported.sizeFormatted})`);
+      showToast(`Imported model: ${imported.name} (${imported.sizeFormatted})`, "success", "Model Imported");
     } catch (err: any) {
-      alert(`Import failed: ${err.message || err}`);
+      showToast(`Import failed: ${err.message || err}`, "error", "Import Error");
     }
   };
 
@@ -573,10 +582,25 @@ function setupActions() {
 
   // Start Server
   const startHandler = async () => {
+    // 1. Verify backend installation
+    try {
+      const backendStatus = await LlamaService.getInstalledBackend();
+      if (!backendStatus.installed) {
+        showToast("Backend executable not found. Please install a backend variant in Overview first.", "warning", "Backend Missing");
+        return;
+      }
+    } catch {
+      // Continue to attempt start
+    }
+
+    // 2. Verify model selection or Router Mode
+    const routerCheck = $<HTMLInputElement>("#cfg-router-mode");
+    const routerEnabled = routerCheck ? routerCheck.checked : false;
+
     const quickSelect = $<HTMLSelectElement>("#quick-model-select");
     const modelPath = quickSelect.value;
-    if (!modelPath) {
-      alert("No model selected. Import, download, or place a .gguf model in models/ first.");
+    if (!routerEnabled && !modelPath) {
+      showToast("No model selected. Import, download, or select a .gguf model in models/ first, or enable Router Mode in Configuration.", "warning", "Model Required");
       return;
     }
 
@@ -584,16 +608,18 @@ function setupActions() {
 
     try {
       await LlamaService.startServer(cfg);
+      showToast(routerEnabled ? "llama-server started in Router Mode" : `llama-server started with model ${modelPath.split(/[/\\]/).pop()}`, "success", "Server Running");
     } catch (err: any) {
-      alert(`Launch error: ${err.message || err}`);
+      showToast(`Launch error: ${err.message || err}`, "error", "Start Failed");
     }
   };
 
   const stopHandler = async () => {
     try {
       await LlamaService.stopServer();
+      showToast("llama-server process stopped.", "info", "Server Stopped");
     } catch (err: any) {
-      alert(`Stop error: ${err.message || err}`);
+      showToast(`Stop error: ${err.message || err}`, "error", "Stop Failed");
     }
   };
 
@@ -614,7 +640,7 @@ function setupActions() {
   $("#btn-save-config").addEventListener("click", async () => {
     const cfg = collectConfigFromUI();
     await LlamaService.saveServerConfig(cfg);
-    alert("Configuration & advanced parameters saved successfully.");
+    showToast("Configuration & advanced parameters saved successfully.", "success", "Settings Saved");
   });
 
   $("#btn-clear-logs").addEventListener("click", () => {
@@ -635,7 +661,7 @@ function setupActions() {
       try {
         await LlamaService.downloadModel(url, filename);
       } catch (err: any) {
-        alert(`Download failed: ${err.message || err}`);
+        showToast(`Download failed: ${err.message || err}`, "error", "Download Error");
       } finally {
         b.removeAttribute("disabled");
       }
@@ -683,7 +709,7 @@ function setupActions() {
               try {
                 await LlamaService.downloadModel(u, fn);
               } catch (e: any) {
-                alert(`Error: ${e.message || e}`);
+                showToast(`Download error: ${e.message || e}`, "error", "Download Error");
               } finally {
                 dl.removeAttribute("disabled");
               }
@@ -694,7 +720,7 @@ function setupActions() {
       container.style.display = "block";
       renderIcons();
     } catch (err: any) {
-      alert(`Repository lookup failed: ${err.message || err}`);
+      showToast(`Repository lookup failed: ${err.message || err}`, "error", "Hugging Face Error");
     } finally {
       btn.disabled = false;
     }
@@ -750,10 +776,10 @@ async function loadReleases() {
         b.setAttribute("disabled", "true");
         try {
           await LlamaService.downloadBackend(tag, v);
-          alert(`llama.cpp ${tag} (${v.toUpperCase()}) installed.`);
+          showToast(`llama.cpp ${tag} (${v.toUpperCase()}) installed successfully. Ready to run!`, "success", "Backend Ready");
           loadBackendStatus();
         } catch (e: any) {
-          alert(`Installation failed: ${e.message || e}`);
+          showToast(`Installation failed: ${e.message || e}`, "error", "Install Failed");
         } finally {
           b.removeAttribute("disabled");
         }
@@ -777,7 +803,7 @@ function setupInlineTest() {
     if (!prompt) return;
 
     if (!isServerRunning) {
-      alert("Please start the server first to run a test prompt.");
+      showToast("Please start the server first to run a test prompt.", "warning", "Server Idle");
       return;
     }
 
@@ -833,9 +859,10 @@ function setupSettings() {
         const modelsInput = document.querySelector<HTMLInputElement>("#settings-models-dir");
         if (modelsInput) modelsInput.value = selected;
         await loadModels();
+        showToast(`Models directory set to ${selected}`, "success", "Settings Updated");
       }
     } catch (err: any) {
-      alert(`Failed to set models directory: ${err.message || err}`);
+      showToast(`Failed to set models directory: ${err.message || err}`, "error", "Settings Error");
     }
   });
 
@@ -854,9 +881,10 @@ function setupSettings() {
         const appDataInput = document.querySelector<HTMLInputElement>("#settings-appdata-dir");
         if (appDataInput) appDataInput.value = selected;
         await loadBackendStatus();
+        showToast(`Application data directory set to ${selected}`, "success", "Settings Updated");
       }
     } catch (err: any) {
-      alert(`Failed to set app data directory: ${err.message || err}`);
+      showToast(`Failed to set app data directory: ${err.message || err}`, "error", "Settings Error");
     }
   });
 
@@ -886,19 +914,16 @@ function setupSettings() {
 
     try {
       if (isServerRunning) {
-        if (!confirm("The server is currently running. Switching backend will stop the current server. Proceed?")) {
-          if (btn) btn.disabled = false;
-          return;
-        }
         await LlamaService.stopServer();
+        showToast("Stopped current server to switch backend runtime.", "info", "Server Stopped");
       }
 
       await LlamaService.switchBackend(variant);
-      alert(`Backend switched to ${variant.toUpperCase()} successfully.`);
+      showToast(`Backend switched to ${variant.toUpperCase()} successfully.`, "success", "Backend Switched");
       await loadBackendStatus();
       await loadSettings();
     } catch (err: any) {
-      alert(`Backend switch failed: ${err.message || err}`);
+      showToast(`Backend switch failed: ${err.message || err}`, "error", "Switch Error");
     } finally {
       if (btn) btn.disabled = false;
     }
@@ -973,29 +998,29 @@ function setupTroubleshoot() {
   btnKill?.addEventListener("click", async () => {
     try {
       await LlamaService.killZombieServers();
-      alert("Sent termination signal to lingering llama-server processes.");
+      showToast("Sent termination signal to lingering llama-server processes.", "info", "Process Terminated");
       await runScan();
       await loadServerStatus();
     } catch (err: any) {
-      alert(`Error: ${err.message || err}`);
+      showToast(`Error: ${err.message || err}`, "error", "Kill Failed");
     }
   });
 
   btnRepair?.addEventListener("click", async () => {
     if (isServerRunning) {
-      if (!confirm("Server is running. Auto-repair will stop the server and reinstall. Proceed?")) return;
       await LlamaService.stopServer();
+      showToast("Stopped current server to proceed with repair.", "info");
     }
 
     try {
       const btn = btnRepair as HTMLButtonElement;
       btn.disabled = true;
       await LlamaService.repairBackend("reinstall");
-      alert("Backend re-download and repair completed successfully.");
+      showToast("Backend re-download and repair completed successfully.", "success", "Repair Complete");
       await loadBackendStatus();
       await runScan();
     } catch (err: any) {
-      alert(`Auto-repair failed: ${err.message || err}`);
+      showToast(`Auto-repair failed: ${err.message || err}`, "error", "Repair Error");
     } finally {
       if (btnRepair) (btnRepair as HTMLButtonElement).disabled = false;
     }
@@ -1077,7 +1102,7 @@ function setupChat() {
     const systemPrompt = $<HTMLTextAreaElement>("#persona-prompt-input").value.trim();
 
     if (!name || !systemPrompt) {
-      alert("Please provide both a Persona Name and a System Prompt.");
+      showToast("Please provide both a Persona Name and a System Prompt.", "warning", "Validation Error");
       return;
     }
 
@@ -1120,9 +1145,15 @@ function setupChat() {
       delBtn.title = "Delete conversation";
       delBtn.innerHTML = `<i data-lucide="trash-2"></i>`;
 
-      delBtn.addEventListener("click", (e) => {
+      delBtn.addEventListener("click", async (e) => {
         e.stopPropagation();
-        if (confirm("Delete this conversation thread?")) {
+        const confirmed = await showConfirm(
+          "Delete Thread",
+          "Are you sure you want to delete this conversation thread and its history?",
+          "Delete Thread",
+          true
+        );
+        if (confirmed) {
           deleteSession(s.id);
           sessions = loadAllSessions();
           currentSessionId = getActiveSessionId();
@@ -1138,6 +1169,7 @@ function setupChat() {
           renderSessions();
           renderPersonaOptions();
           renderStage();
+          showToast("Conversation thread deleted.", "info");
         }
       });
 
@@ -1170,8 +1202,14 @@ function setupChat() {
   });
 
   // Clear current thread messages
-  btnClearChat.addEventListener("click", () => {
-    if (confirm("Clear all messages in the active thread?")) {
+  btnClearChat.addEventListener("click", async () => {
+    const confirmed = await showConfirm(
+      "Clear Conversation",
+      "Clear all message history in the active thread?",
+      "Clear All",
+      true
+    );
+    if (confirmed) {
       currentSession.nodes = {};
       currentSession.rootNodeId = null;
       currentSession.activeNodeId = null;
@@ -1179,6 +1217,7 @@ function setupChat() {
       saveSession(currentSession);
       renderSessions();
       renderStage();
+      showToast("Conversation history cleared.", "info");
     }
   });
 
@@ -1364,7 +1403,7 @@ function setupChat() {
   // Regenerate assistant response
   async function executeRegenerate(assistantNode: ChatNode) {
     if (!isServerRunning) {
-      alert("Start the server on the Overview tab before generating responses.");
+      showToast("Start the server on the Overview tab before generating responses.", "warning", "Server Stopped");
       return;
     }
     regenerateAssistantNode(currentSession, assistantNode.id);
@@ -1375,7 +1414,7 @@ function setupChat() {
   // Trigger inference generation for the current active branch
   async function triggerAssistantGeneration() {
     if (!isServerRunning) {
-      alert("Start the server on the Overview tab before testing in the playground.");
+      showToast("Start the server on the Overview tab before testing in the playground.", "warning", "Server Stopped");
       return;
     }
 
@@ -1432,7 +1471,7 @@ function setupChat() {
     if (!text) return;
 
     if (!isServerRunning) {
-      alert("Start the server on the Overview tab before testing in the playground.");
+      showToast("Start the server on the Overview tab before testing in the playground.", "warning", "Server Stopped");
       return;
     }
 

@@ -36,8 +36,8 @@ func detectHardware() HardwareInfo {
 	}
 
 	// Detect CPU Name & Cores on Windows via PowerShell CIM
-	cmdCPU := exec.Command("powershell", "-NoProfile", "-Command",
-		"Get-CimInstance Win32_Processor | Select-Object -First 1 Name, NumberOfCores, NumberOfLogicalProcessors | ConvertTo-Json")
+	cmdCPU := prepareCmd(exec.Command("powershell", "-NoProfile", "-Command",
+		"Get-CimInstance Win32_Processor | Select-Object -First 1 Name, NumberOfCores, NumberOfLogicalProcessors | ConvertTo-Json"))
 	if out, err := cmdCPU.Output(); err == nil {
 		str := string(out)
 		if strings.Contains(str, `"Name":`) {
@@ -56,8 +56,8 @@ func detectHardware() HardwareInfo {
 	}
 
 	// Detect GPU on Windows
-	cmdGPU := exec.Command("powershell", "-NoProfile", "-Command",
-		"Get-CimInstance Win32_VideoController | Select-Object Name, AdapterRAM | ConvertTo-Json")
+	cmdGPU := prepareCmd(exec.Command("powershell", "-NoProfile", "-Command",
+		"Get-CimInstance Win32_VideoController | Select-Object Name, AdapterRAM | ConvertTo-Json"))
 	if out, err := cmdGPU.Output(); err == nil {
 		str := string(out)
 		// Check for NVIDIA GPU
@@ -79,7 +79,7 @@ func detectHardware() HardwareInfo {
 	}
 
 	// Double check nvidia-smi if available for precise VRAM
-	cmdSmi := exec.Command("nvidia-smi", "--query-gpu=gpu_name,memory.total", "--format=csv,noheader,nounits")
+	cmdSmi := prepareCmd(exec.Command("nvidia-smi", "--query-gpu=gpu_name,memory.total", "--format=csv,noheader,nounits"))
 	var smiOut bytes.Buffer
 	cmdSmi.Stdout = &smiOut
 	if err := cmdSmi.Run(); err == nil {

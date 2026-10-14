@@ -158,9 +158,9 @@ func (sm *ServerManager) Start(cfg ServerConfig) error {
 		return fmt.Errorf("llama-server is already running (PID %d)", sm.cmd.Process.Pid)
 	}
 
-	serverExe := filepath.Join(sm.binDir, "llama-server.exe")
+	serverExe := filepath.Join(sm.binDir, getServerExeName())
 	if _, err := os.Stat(serverExe); err != nil {
-		return fmt.Errorf("llama-server.exe not found in %s; please download the backend first", sm.binDir)
+		return fmt.Errorf("%s not found in %s; please download the backend in Overview first", getServerExeName(), sm.binDir)
 	}
 
 	if !cfg.RouterMode {
@@ -297,8 +297,23 @@ func (sm *ServerManager) Start(cfg ServerConfig) error {
 		args = append(args, extraParts...)
 	}
 
-	cmd := exec.Command(serverExe, args...)
+	cmd := prepareCmd(exec.Command(serverExe, args...))
 	cmd.Dir = sm.binDir
+
+	// Prepend binDir to PATH so Windows dynamic loader reliably finds cudart, cublas, and ggml DLLs
+	env := os.Environ()
+	pathUpdated := false
+	for i, e := range env {
+		if strings.HasPrefix(strings.ToUpper(e), "PATH=") {
+			env[i] = fmt.Sprintf("PATH=%s;%s", sm.binDir, e[5:])
+			pathUpdated = true
+			break
+		}
+	}
+	if !pathUpdated {
+		env = append(env, fmt.Sprintf("PATH=%s", sm.binDir))
+	}
+	cmd.Env = env
 
 	stdoutPipe, err := cmd.StdoutPipe()
 	if err != nil {
@@ -323,11 +338,15 @@ func (sm *ServerManager) Start(cfg ServerConfig) error {
 
 	// Wait in background to track exit
 	go func() {
-		_ = cmd.Wait()
+		waitErr := cmd.Wait()
 		sm.mu.Lock()
 		sm.running = false
 		sm.mu.Unlock()
-		sm.addLog(fmt.Sprintf("[System] llama-server process (PID %d) stopped", cmd.Process.Pid))
+		if waitErr != nil {
+			sm.addLog(fmt.Sprintf("[System] llama-server process (PID %d) exited: %v", cmd.Process.Pid, waitErr))
+		} else {
+			sm.addLog(fmt.Sprintf("[System] llama-server process (PID %d) stopped cleanly", cmd.Process.Pid))
+		}
 	}()
 
 	sm.addLog(fmt.Sprintf("[System] Started llama-server with model %s on %s:%d", filepath.Base(cfg.ModelPath), cfg.Host, cfg.Port))
@@ -343,8 +362,8 @@ func (sm *ServerManager) Stop() error {
 	}
 
 	pid := sm.cmd.Process.Pid
-	// On Windows, use taskkill to kill process tree cleanly
-	killCmd := exec.Command("taskkill", "/PID", strconv.Itoa(pid), "/T", "/F")
+	// On Windows, use taskkill to kill process tree cleanly without flashing console
+	killCmd := prepareCmd(exec.Command("taskkill", "/PID", strconv.Itoa(pid), "/T", "/F"))
 	_ = killCmd.Run()
 
 	sm.running = false
