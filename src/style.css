@@ -893,7 +893,6 @@ table.data-table tr:hover td {
   cursor: pointer;
   transition: background 0.12s ease, color 0.12s ease;
   user-select: none;
-  border-left: 2.5px solid transparent;
   position: relative;
 }
 
@@ -906,7 +905,6 @@ table.data-table tr:hover td {
   background: var(--bg-elevated);
   color: var(--text-high);
   font-weight: 500;
-  border-left-color: var(--text-high);
 }
 
 .thread-item .thread-icon,
