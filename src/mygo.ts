@@ -299,6 +299,10 @@ export const LlamaService = {
   saveSettings(settings: AppSettings): Promise<void> {
     return call("LlamaService.SaveSettings", settings);
   },
+  /** SaveSnippetDialog opens a native save file dialog and writes the code snippet to disk. */
+  saveSnippetDialog(defaultFilename: string, content: string): Promise<string> {
+    return call("LlamaService.SaveSnippetDialog", defaultFilename, content);
+  },
   /** SelectFileDialog opens a native file picker to select a file with filter. */
   selectFileDialog(title: string, filterName: string, extension: string): Promise<string> {
     return call("LlamaService.SelectFileDialog", title, filterName, extension);

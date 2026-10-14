@@ -11,7 +11,9 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "highlight.js": "^11.12.0",
     "lucide": "^1.57.0",
+    "marked": "^18.1.1",
     "mygo-runtime": "^0.4.8"
   },
   "devDependencies": {

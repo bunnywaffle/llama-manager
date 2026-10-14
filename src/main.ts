@@ -40,6 +40,9 @@ import {
   Settings2,
   Brain,
 } from "lucide";
+import { marked } from "marked";
+import hljs from "highlight.js";
+import "highlight.js/styles/github-dark.css";
 import {
   LlamaService,
   events,
@@ -120,6 +123,134 @@ function renderIcons() {
 // Helpers
 const $ = <T extends HTMLElement>(sel: string) => document.querySelector<T>(sel)!;
 const $$ = (sel: string) => document.querySelectorAll<HTMLElement>(sel);
+
+function escapeHtml(str: string): string {
+  return str
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
+function getExtensionForLang(lang: string): string {
+  const map: Record<string, string> = {
+    python: "py",
+    py: "py",
+    javascript: "js",
+    js: "js",
+    typescript: "ts",
+    ts: "ts",
+    golang: "go",
+    go: "go",
+    rust: "rs",
+    rs: "rs",
+    c: "c",
+    cpp: "cpp",
+    cplusplus: "cpp",
+    csharp: "cs",
+    cs: "cs",
+    java: "java",
+    html: "html",
+    css: "css",
+    scss: "scss",
+    json: "json",
+    yaml: "yaml",
+    yml: "yml",
+    xml: "xml",
+    markdown: "md",
+    md: "md",
+    sql: "sql",
+    shell: "sh",
+    bash: "sh",
+    sh: "sh",
+    powershell: "ps1",
+    ps1: "ps1",
+    dockerfile: "dockerfile",
+    php: "php",
+    ruby: "rb",
+    rb: "rb",
+    lua: "lua",
+    r: "r",
+    swift: "swift",
+    kotlin: "kt",
+    kt: "kt",
+    toml: "toml",
+    ini: "ini",
+    bat: "bat",
+    cmd: "cmd",
+  };
+  return map[lang.toLowerCase()] || "txt";
+}
+
+function downloadSnippet(filename: string, content: string) {
+  const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+marked.setOptions({
+  gfm: true,
+  breaks: true,
+});
+
+marked.use({
+  renderer: {
+    code({ text, lang }) {
+      const language = (lang || "").toLowerCase().trim();
+      let highlighted = "";
+      if (language && hljs.getLanguage(language)) {
+        try {
+          highlighted = hljs.highlight(text, { language }).value;
+        } catch {
+          highlighted = escapeHtml(text);
+        }
+      } else {
+        try {
+          highlighted = hljs.highlightAuto(text).value;
+        } catch {
+          highlighted = escapeHtml(text);
+        }
+      }
+
+      const displayLang = language || "code";
+      const ext = getExtensionForLang(displayLang);
+      const defaultFilename = `snippet.${ext}`;
+
+      return `<div class="code-block-container" data-lang="${displayLang}">
+  <div class="code-block-header">
+    <span class="code-block-lang">${displayLang}</span>
+    <div class="code-block-actions">
+      <button type="button" class="btn-code-copy" title="Copy code snippet">
+        <i data-lucide="copy"></i>
+        <span>Copy</span>
+      </button>
+      <button type="button" class="btn-code-save" data-filename="${defaultFilename}" title="Save code to file">
+        <i data-lucide="download"></i>
+        <span>Save</span>
+      </button>
+    </div>
+  </div>
+  <pre><code class="hljs ${language ? `language-${language}` : ""}">${highlighted}</code></pre>
+</div>`;
+    },
+  },
+});
+
+function renderMarkdown(raw: string): string {
+  if (!raw) return "";
+  try {
+    return marked.parse(raw, { async: false }) as string;
+  } catch (err) {
+    return escapeHtml(raw);
+  }
+}
 
 let isServerRunning = false;
 let currentServerHost = "127.0.0.1";
@@ -1500,6 +1631,59 @@ function setupChat() {
     }
   });
 
+  // Code block copy & save actions via event delegation
+  container.addEventListener("click", async (e) => {
+    const target = e.target as HTMLElement;
+
+    // 1. Copy snippet
+    const copyBtn = target.closest<HTMLButtonElement>(".btn-code-copy");
+    if (copyBtn) {
+      const codeContainer = copyBtn.closest<HTMLElement>(".code-block-container");
+      const codeEl = codeContainer?.querySelector("code");
+      if (codeEl) {
+        const codeText = codeEl.textContent || "";
+        try {
+          await navigator.clipboard.writeText(codeText);
+          const span = copyBtn.querySelector("span");
+          if (span) span.textContent = "Copied!";
+          copyBtn.classList.add("copied");
+          setTimeout(() => {
+            if (span) span.textContent = "Copy";
+            copyBtn.classList.remove("copied");
+          }, 1500);
+        } catch (err: any) {
+          showToast(`Copy failed: ${err.message || err}`, "error");
+        }
+      }
+      return;
+    }
+
+    // 2. Save snippet to file
+    const saveBtn = target.closest<HTMLButtonElement>(".btn-code-save");
+    if (saveBtn) {
+      const codeContainer = saveBtn.closest<HTMLElement>(".code-block-container");
+      const codeEl = codeContainer?.querySelector("code");
+      if (codeEl) {
+        const codeText = codeEl.textContent || "";
+        const lang = codeContainer?.dataset.lang || "code";
+        const ext = getExtensionForLang(lang);
+        const defaultFilename = saveBtn.dataset.filename || `snippet.${ext}`;
+
+        try {
+          const savedPath = await LlamaService.saveSnippetDialog(defaultFilename, codeText);
+          if (savedPath) {
+            showToast(`Snippet saved to ${savedPath.split(/[/\\]/).pop()}`, "success", "Code Saved");
+          }
+        } catch (err) {
+          // Fallback to browser blob download
+          downloadSnippet(defaultFilename, codeText);
+          showToast(`Downloaded ${defaultFilename}`, "success", "Code Saved");
+        }
+      }
+      return;
+    }
+  });
+
   let sessions = loadAllSessions();
   let currentSessionId = getActiveSessionId();
   let currentSession: ChatSession;
@@ -1749,7 +1933,8 @@ function setupChat() {
 
       if (parsed.answer) {
         answerDiv.className = "chat-answer-body";
-        answerDiv.textContent = parsed.answer;
+        answerDiv.innerHTML = renderMarkdown(parsed.answer);
+        renderIcons();
       } else {
         if (isStreaming) {
           answerDiv.className = "chat-answer-body chat-answer-empty";
@@ -1765,7 +1950,8 @@ function setupChat() {
         bubbleEl.innerHTML = "";
       }
       if (content) {
-        bubbleEl.textContent = content;
+        bubbleEl.innerHTML = renderMarkdown(content);
+        renderIcons();
       } else if (isStreaming) {
         bubbleEl.textContent = "Thinking...";
       } else {
@@ -1811,7 +1997,8 @@ function setupChat() {
       if (node.role === "assistant") {
         renderBubbleContent(bubble, node.content, false);
       } else {
-        bubble.textContent = node.content;
+        bubble.innerHTML = renderMarkdown(node.content);
+        renderIcons();
       }
 
       wrapper.appendChild(bubble);

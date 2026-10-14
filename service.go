@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 
 	"github.com/egoist/mygo"
@@ -189,6 +190,46 @@ func (s *LlamaService) SelectFileDialog(title string, filterName string, extensi
 		return "", nil // cancelled
 	}
 	return paths[0], nil
+}
+
+// SaveSnippetDialog opens a native save file dialog and writes the code snippet to disk.
+func (s *LlamaService) SaveSnippetDialog(defaultFilename, content string) (string, error) {
+	s.mu.Lock()
+	win := s.win
+	s.mu.Unlock()
+
+	ext := filepath.Ext(defaultFilename)
+	var filters []mygo.FileFilter
+	if ext != "" {
+		trimmedExt := strings.TrimPrefix(ext, ".")
+		filters = append(filters, mygo.FileFilter{
+			Name:       fmt.Sprintf("%s files (*%s)", strings.ToUpper(trimmedExt), ext),
+			Extensions: []string{trimmedExt},
+		})
+	}
+	filters = append(filters, mygo.FileFilter{
+		Name:       "All Files (*.*)",
+		Extensions: []string{"*"},
+	})
+
+	filePath, err := mygo.Dialog.Save(mygo.SaveDialogOptions{
+		Parent:      win,
+		Title:       "Save Code Snippet",
+		DefaultPath: defaultFilename,
+		Filters:     filters,
+	})
+	if err != nil {
+		return "", err
+	}
+	if filePath == "" {
+		return "", nil // user cancelled
+	}
+
+	if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
+		return "", fmt.Errorf("failed to save file: %w", err)
+	}
+
+	return filePath, nil
 }
 
 // OpenFolderInExplorer opens the specified directory in the host OS's native file manager.

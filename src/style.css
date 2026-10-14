@@ -1251,8 +1251,8 @@ table.data-table tr:hover td {
 }
 
 .chat-answer-body {
-  white-space: pre-wrap;
   word-break: break-word;
+  line-height: 1.6;
 }
 
 .chat-answer-empty {
@@ -1261,25 +1261,193 @@ table.data-table tr:hover td {
   font-style: italic;
 }
 
-.chat-entry code {
+/* Markdown Elements in Chat Bubbles */
+.chat-entry p {
+  margin: 0 0 10px 0;
+}
+
+.chat-entry p:last-child {
+  margin-bottom: 0;
+}
+
+.chat-entry h1,
+.chat-entry h2,
+.chat-entry h3,
+.chat-entry h4 {
+  margin: 14px 0 6px 0;
+  font-weight: 600;
+  color: var(--text-high);
+  line-height: 1.35;
+}
+
+.chat-entry h1 { font-size: 18px; }
+.chat-entry h2 { font-size: 16px; }
+.chat-entry h3 { font-size: 14.5px; }
+.chat-entry h4 { font-size: 13.5px; }
+
+.chat-entry ul,
+.chat-entry ol {
+  margin: 6px 0 10px 20px;
+  padding: 0;
+}
+
+.chat-entry li {
+  margin-bottom: 4px;
+}
+
+.chat-entry strong,
+.chat-entry b {
+  font-weight: 600;
+  color: var(--text-high);
+}
+
+.chat-entry blockquote {
+  margin: 8px 0;
+  padding: 6px 12px;
+  border-left: 3px solid var(--border-default);
+  background: rgba(255, 255, 255, 0.02);
+  color: var(--text-medium);
+  border-radius: 0 var(--radius-xs) var(--radius-xs) 0;
+}
+
+.chat-entry a {
+  color: #818cf8;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  transition: color 0.12s ease;
+}
+
+.chat-entry a:hover {
+  color: #a5b4fc;
+}
+
+.chat-entry table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 10px 0;
+  font-size: 12.5px;
+}
+
+.chat-entry th,
+.chat-entry td {
+  border: 1px solid var(--border-subtle);
+  padding: 6px 10px;
+  text-align: left;
+}
+
+.chat-entry th {
+  background: rgba(255, 255, 255, 0.05);
+  font-weight: 600;
+  color: var(--text-high);
+}
+
+.chat-entry tr:nth-child(even) {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.chat-entry hr {
+  border: none;
+  border-top: 1px solid var(--border-subtle);
+  margin: 12px 0;
+}
+
+/* Inline Code */
+.chat-entry :not(pre) > code {
   font-family: var(--font-mono);
   font-size: 12px;
   background: var(--bg-canvas);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-xs);
-  padding: 1px 4px;
+  padding: 2px 5px;
+  color: #f43f5e;
 }
 
-.chat-entry pre {
-  margin: 8px 0;
-  padding: 10px 12px;
-  background: var(--bg-canvas);
-  border: 1px solid var(--border-subtle);
+/* Syntax Highlighted Code Blocks */
+.code-block-container {
+  margin: 10px 0;
   border-radius: var(--radius-sm);
+  background: #0d1117;
+  border: 1px solid var(--border-default);
+  overflow: hidden;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+}
+
+.code-block-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 5px 12px;
+  background: #161b22;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.code-block-lang {
+  color: var(--text-medium);
+  font-weight: 600;
+  text-transform: lowercase;
+  letter-spacing: 0.5px;
+}
+
+.code-block-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.btn-code-copy,
+.btn-code-save {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: var(--radius-xs);
+  color: var(--text-medium);
+  padding: 2.5px 8px;
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.14s ease;
+  font-family: inherit;
+}
+
+.btn-code-copy:hover,
+.btn-code-save:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-high);
+  border-color: rgba(255, 255, 255, 0.25);
+}
+
+.btn-code-copy.copied {
+  color: #4ade80 !important;
+  border-color: #4ade80 !important;
+}
+
+.btn-code-copy svg,
+.btn-code-save svg {
+  width: 12px;
+  height: 12px;
+  stroke-width: 1.75;
+}
+
+.code-block-container pre {
+  margin: 0 !important;
+  padding: 12px 14px !important;
+  background: #0d1117 !important;
+  border: none !important;
+  border-radius: 0 !important;
   overflow-x: auto;
   font-family: var(--font-mono);
-  font-size: 12px;
-  line-height: 1.45;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.code-block-container pre code.hljs {
+  padding: 0 !important;
+  background: transparent !important;
+  border: none !important;
+  font-family: var(--font-mono);
 }
 
 /* Branching Pagination & Actions Toolbar */
