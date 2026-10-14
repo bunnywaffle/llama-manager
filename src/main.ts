@@ -1048,7 +1048,7 @@ function setupInlineTest() {
     output.textContent = "Processing prompt...";
 
     try {
-      const res = await LlamaService.sendChat([{ role: "user", content: prompt }], 0.7);
+      const res = await LlamaService.sendChat([{ role: "user", content: prompt }], 0.7, "");
       output.textContent = res;
     } catch (e: any) {
       output.textContent = `Error: ${e.message || e}`;

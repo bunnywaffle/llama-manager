@@ -177,7 +177,7 @@ export interface ServerConfig {
   draftMaxTokens: number;
   draftGpuLayers: number;
   draftSpecType: string;
-  /** Reasoning & Thinking Parameters */
+  /** Reasoning & Thinking Settings (DeepSeek-R1, QwQ, etc.) */
   reasoningFormat: string;
   reasoningEffort: string;
   enableJinja: boolean;
@@ -308,12 +308,12 @@ export const LlamaService = {
     return call("LlamaService.SelectFolderDialog", title);
   },
   /** SendChat proxies a chat message list to the running server with an optional reasoning effort. */
-  sendChat(messages: ChatMessage[], temperature: number, reasoningEffort?: string): Promise<string> {
-    return call("LlamaService.SendChat", messages, temperature, reasoningEffort || "");
+  sendChat(messages: ChatMessage[], temperature: number, reasoningEffort: string): Promise<string> {
+    return call("LlamaService.SendChat", messages, temperature, reasoningEffort);
   },
   /** SendChatWithModel proxies chat messages to llama-server with an optional model name (for Router Mode) and reasoning effort. */
-  sendChatWithModel(model: string, messages: ChatMessage[], temperature: number, reasoningEffort?: string): Promise<string> {
-    return call("LlamaService.SendChatWithModel", model, messages, temperature, reasoningEffort || "");
+  sendChatWithModel(model: string, messages: ChatMessage[], temperature: number, reasoningEffort: string): Promise<string> {
+    return call("LlamaService.SendChatWithModel", model, messages, temperature, reasoningEffort);
   },
   /** SetActiveBackend switches the current active backend to an installed variant. */
   setActiveBackend(variant: string): Promise<void> {
