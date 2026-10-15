@@ -253,6 +253,10 @@ export const LlamaService = {
   getInstalledBackends(): Promise<BackendVariantInfo[]> {
     return call("LlamaService.GetInstalledBackends");
   },
+  /** GetModelConfig retrieves the unique configuration JSON for a specific model file. */
+  getModelConfig(modelPath: string): Promise<ServerConfig> {
+    return call("LlamaService.GetModelConfig", modelPath);
+  },
   /** GetModelsDir returns the current models directory path. */
   getModelsDir(): Promise<string> {
     return call("LlamaService.GetModelsDir");
@@ -296,6 +300,10 @@ export const LlamaService = {
   /** RunDiagnostics performs a comprehensive health scan of the backend and environment. */
   runDiagnostics(): Promise<TroubleshootReport> {
     return call("LlamaService.RunDiagnostics");
+  },
+  /** SaveModelConfig saves configuration for a specific model to its individual JSON file. */
+  saveModelConfig(modelPath: string, cfg: ServerConfig): Promise<void> {
+    return call("LlamaService.SaveModelConfig", modelPath, cfg);
   },
   /** SaveServerConfig updates the server configuration without starting it. */
   saveServerConfig(cfg: ServerConfig): Promise<void> {

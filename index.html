@@ -423,8 +423,14 @@
             <div class="surface-card" style="max-width: 680px;">
               <div class="surface-header">
                 <div>
-                  <div class="surface-title"><i data-lucide="sliders-horizontal"></i> Server Parameters</div>
-                  <div class="surface-desc">Customize runtime flags passed to llama-server.exe.</div>
+                  <div class="surface-title"><i data-lucide="sliders-horizontal"></i> Server & Model Parameters</div>
+                  <div class="surface-desc">Model-specific runtime parameters saved to individual .json configuration files.</div>
+                </div>
+                <div style="display: flex; gap: 8px; align-items: center;">
+                  <span class="tag-badge accent" id="config-model-badge" title="Active model configuration file">
+                    <i data-lucide="file-json" style="width: 12px; height: 12px; vertical-align: middle;"></i>
+                    <span id="config-model-badge-text">Default Config</span>
+                  </span>
                 </div>
               </div>
 
@@ -568,6 +574,10 @@
                     <div class="adv-section-title">Memory & KV Cache</div>
                     <div class="adv-grid">
                       <div class="form-field" style="margin-bottom: 0;">
+                        <label class="form-label">Batch Size (-b)</label>
+                        <input type="number" class="form-input" id="cfg-batch" step="64" min="64" value="512" />
+                      </div>
+                      <div class="form-field" style="margin-bottom: 0;">
                         <label class="form-label">Micro-batch Size (-ub)</label>
                         <input type="number" class="form-input" id="cfg-micro-batch" step="64" min="64" value="512" />
                       </div>
@@ -706,10 +716,13 @@
                 <input type="text" class="form-input" id="cfg-extra-args" placeholder="--alias my-model" />
               </div>
 
-              <button class="btn btn-primary" id="btn-save-config">
-                <i data-lucide="check-circle"></i>
-                <span>Save Configuration</span>
-              </button>
+              <div style="display: flex; gap: 12px; align-items: center; margin-top: 16px; flex-wrap: wrap;">
+                <button class="btn btn-primary" id="btn-save-config">
+                  <i data-lucide="check-circle"></i>
+                  <span>Save Configuration</span>
+                </button>
+                <span class="surface-desc" id="config-save-hint" style="margin: 0; font-size: 12px;">Saves to this model's personal .json configuration file.</span>
+              </div>
             </div>
           </div>
 

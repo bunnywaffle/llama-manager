@@ -583,29 +583,24 @@ async function loadModels() {
       tbody.appendChild(tr);
     });
 
-    quickSelect.addEventListener("change", async () => {
-      const selectedPath = quickSelect.value;
-      if (selectedPath) {
-        const mmprojInput = document.querySelector<HTMLInputElement>("#cfg-mmproj");
-        if (mmprojInput && !mmprojInput.value.trim()) {
-          try {
-            const detected = await LlamaService.autoDetectMMProj(selectedPath);
-            if (detected) {
-              mmprojInput.value = detected;
-              updateLinkedModelsBadge();
-              showToast(`Auto-linked vision projector: ${detected.split(/[/\\]/).pop()}`, "info", "Vision Projector Found");
-            }
-          } catch {}
+    if (!quickSelect.dataset.listenerAttached) {
+      quickSelect.dataset.listenerAttached = "true";
+      quickSelect.addEventListener("change", async () => {
+        const selectedPath = quickSelect.value;
+        if (selectedPath) {
+          await loadConfigForModel(selectedPath);
+        } else {
+          updateConfigModelBadge("");
         }
-      }
-    });
+      });
+    }
 
     $$(".btn-run-model").forEach((b) => {
       b.addEventListener("click", async () => {
         const p = b.getAttribute("data-path");
         if (p) {
           quickSelect.value = p;
-          quickSelect.dispatchEvent(new Event("change"));
+          await loadConfigForModel(p);
           const nav = document.querySelector<HTMLElement>('[data-tab="dashboard"]');
           nav?.click();
           await startServerHandler();
@@ -614,11 +609,11 @@ async function loadModels() {
     });
 
     $$(".btn-sel-model").forEach((b) => {
-      b.addEventListener("click", () => {
+      b.addEventListener("click", async () => {
         const p = b.getAttribute("data-path");
         if (p) {
           quickSelect.value = p;
-          quickSelect.dispatchEvent(new Event("change"));
+          await loadConfigForModel(p);
           const nav = document.querySelector<HTMLElement>('[data-tab="dashboard"]');
           nav?.click();
         }
@@ -647,6 +642,10 @@ async function loadModels() {
         quickSelect.value = s.defaultModel;
       }
     } catch {}
+
+    if (quickSelect.value) {
+      await loadConfigForModel(quickSelect.value);
+    }
 
     const routerSelect = document.querySelector<HTMLSelectElement>("#chat-router-model-select");
     if (routerSelect) {
@@ -698,6 +697,25 @@ async function loadModels() {
 }
 
 
+function updateConfigModelBadge(modelPath?: string) {
+  const badgeText = document.querySelector<HTMLElement>("#config-model-badge-text");
+  const hintText = document.querySelector<HTMLElement>("#config-save-hint");
+  if (!badgeText) return;
+
+  if (modelPath) {
+    const baseName = modelPath.split(/[/\\]/).pop()?.replace(/\.gguf$/i, "") || "Model";
+    badgeText.textContent = `${baseName}.json`;
+    if (hintText) {
+      hintText.textContent = `Saves to ${baseName}.json alongside model.`;
+    }
+  } else {
+    badgeText.textContent = "Global Default";
+    if (hintText) {
+      hintText.textContent = "Saves to default server configuration.";
+    }
+  }
+}
+
 function collectConfigFromUI(overrideModelPath?: string): ServerConfig {
   const quickSelect = $<HTMLSelectElement>("#quick-model-select");
   return {
@@ -707,7 +725,7 @@ function collectConfigFromUI(overrideModelPath?: string): ServerConfig {
     gpuLayers: Number($<HTMLInputElement>("#cfg-gpu-layers").value || 99),
     contextSize: Number($<HTMLSelectElement>("#cfg-context").value || 4096),
     threads: Number($<HTMLInputElement>("#cfg-threads").value || 6),
-    batchSize: 512,
+    batchSize: Number($<HTMLInputElement>("#cfg-batch")?.value || 512),
     flashAttention: $<HTMLInputElement>("#cfg-flash-attn").checked,
     extraArgs: $<HTMLInputElement>("#cfg-extra-args").value,
 
@@ -795,91 +813,244 @@ function updateRouterModeUI(enabled: boolean) {
   }
 }
 
+function applyConfigToUI(cfg: ServerConfig) {
+  if (cfg.host) {
+    const hostEl = $<HTMLInputElement>("#cfg-host");
+    if (hostEl) hostEl.value = cfg.host;
+    currentServerHost = cfg.host;
+  }
+  if (cfg.port) {
+    const portEl = $<HTMLInputElement>("#cfg-port");
+    if (portEl) portEl.value = String(cfg.port);
+    const qPort = $<HTMLInputElement>("#quick-port");
+    if (qPort) qPort.value = String(cfg.port);
+    currentServerPort = cfg.port;
+  }
+  if (cfg.gpuLayers !== undefined) {
+    const gpuLayers = $<HTMLInputElement>("#cfg-gpu-layers");
+    if (gpuLayers) gpuLayers.value = String(cfg.gpuLayers);
+    const badge = $("#cfg-gpu-layers-val");
+    if (badge) badge.textContent = String(cfg.gpuLayers);
+  }
+  if (cfg.contextSize) {
+    const ctx = $<HTMLSelectElement>("#cfg-context");
+    if (ctx) ctx.value = String(cfg.contextSize);
+  }
+  if (cfg.threads !== undefined) {
+    const threads = $<HTMLInputElement>("#cfg-threads");
+    if (threads) threads.value = String(cfg.threads);
+    const tBadge = $("#cfg-threads-val");
+    if (tBadge) tBadge.textContent = String(cfg.threads);
+  }
+  if (cfg.batchSize !== undefined) {
+    const batchInput = $<HTMLInputElement>("#cfg-batch");
+    if (batchInput) batchInput.value = String(cfg.batchSize);
+  }
+  if (cfg.flashAttention !== undefined) {
+    const fa = $<HTMLInputElement>("#cfg-flash-attn");
+    if (fa) fa.checked = cfg.flashAttention;
+  }
+  if (cfg.extraArgs !== undefined) {
+    const extra = $<HTMLInputElement>("#cfg-extra-args");
+    if (extra) extra.value = cfg.extraArgs;
+  }
+
+  const routerCheck = $<HTMLInputElement>("#cfg-router-mode");
+  if (routerCheck && cfg.routerMode !== undefined) {
+    routerCheck.checked = cfg.routerMode;
+    updateRouterModeUI(cfg.routerMode);
+  }
+
+  // Advanced Sampling
+  if (cfg.temperature !== undefined) {
+    const el = $<HTMLInputElement>("#cfg-temp");
+    if (el) el.value = String(cfg.temperature);
+  }
+  if (cfg.topP !== undefined) {
+    const el = $<HTMLInputElement>("#cfg-top-p");
+    if (el) el.value = String(cfg.topP);
+  }
+  if (cfg.topK !== undefined) {
+    const el = $<HTMLInputElement>("#cfg-top-k");
+    if (el) el.value = String(cfg.topK);
+  }
+  if (cfg.minP !== undefined) {
+    const el = $<HTMLInputElement>("#cfg-min-p");
+    if (el) el.value = String(cfg.minP);
+  }
+  if (cfg.typicalP !== undefined) {
+    const el = $<HTMLInputElement>("#cfg-typical");
+    if (el) el.value = String(cfg.typicalP);
+  }
+  if (cfg.repeatPenalty !== undefined) {
+    const el = $<HTMLInputElement>("#cfg-repeat-penalty");
+    if (el) el.value = String(cfg.repeatPenalty);
+  }
+  if (cfg.repeatLastN !== undefined) {
+    const el = $<HTMLInputElement>("#cfg-repeat-last-n");
+    if (el) el.value = String(cfg.repeatLastN);
+  }
+  if (cfg.presencePenalty !== undefined) {
+    const el = $<HTMLInputElement>("#cfg-presence-penalty");
+    if (el) el.value = String(cfg.presencePenalty);
+  }
+  if (cfg.frequencyPenalty !== undefined) {
+    const el = $<HTMLInputElement>("#cfg-frequency-penalty");
+    if (el) el.value = String(cfg.frequencyPenalty);
+  }
+  if (cfg.maxPredict !== undefined) {
+    const el = $<HTMLInputElement>("#cfg-max-predict");
+    if (el) el.value = String(cfg.maxPredict);
+  }
+  if (cfg.seed !== undefined) {
+    const el = $<HTMLInputElement>("#cfg-seed");
+    if (el) el.value = String(cfg.seed);
+  }
+
+  // Memory & KV Cache
+  if (cfg.microBatchSize !== undefined) {
+    const el = $<HTMLInputElement>("#cfg-micro-batch");
+    if (el) el.value = String(cfg.microBatchSize);
+  }
+  if (cfg.cacheTypeK) {
+    const el = $<HTMLSelectElement>("#cfg-cache-type-k");
+    if (el) el.value = cfg.cacheTypeK;
+  }
+  if (cfg.cacheTypeV) {
+    const el = $<HTMLSelectElement>("#cfg-cache-type-v");
+    if (el) el.value = cfg.cacheTypeV;
+  }
+  if (cfg.mlock !== undefined) {
+    const el = $<HTMLInputElement>("#cfg-mlock");
+    if (el) el.checked = cfg.mlock;
+  }
+  if (cfg.noMmap !== undefined) {
+    const el = $<HTMLInputElement>("#cfg-no-mmap");
+    if (el) el.checked = cfg.noMmap;
+  }
+
+  // Concurrency & Server
+  if (cfg.parallelSlots !== undefined) {
+    const el = $<HTMLInputElement>("#cfg-parallel-slots");
+    if (el) el.value = String(cfg.parallelSlots);
+  }
+  if (cfg.contBatching !== undefined) {
+    const el = $<HTMLInputElement>("#cfg-cont-batching");
+    if (el) el.checked = cfg.contBatching;
+  }
+  if (cfg.threadsHttp !== undefined) {
+    const el = $<HTMLInputElement>("#cfg-threads-http");
+    if (el) el.value = String(cfg.threadsHttp);
+  }
+  if (cfg.threadsBatch !== undefined) {
+    const el = $<HTMLInputElement>("#cfg-threads-batch");
+    if (el) el.value = String(cfg.threadsBatch);
+  }
+  if (cfg.embedding !== undefined) {
+    const el = $<HTMLInputElement>("#cfg-embedding");
+    if (el) el.checked = cfg.embedding;
+  }
+  if (cfg.metrics !== undefined) {
+    const el = $<HTMLInputElement>("#cfg-metrics");
+    if (el) el.checked = cfg.metrics;
+  }
+
+  // Multi-GPU & RoPE
+  if (cfg.mainGpu !== undefined) {
+    const el = $<HTMLInputElement>("#cfg-main-gpu");
+    if (el) el.value = String(cfg.mainGpu);
+  }
+  if (cfg.splitMode) {
+    const el = $<HTMLSelectElement>("#cfg-split-mode");
+    if (el) el.value = cfg.splitMode;
+  }
+  if (cfg.ropeScaling) {
+    const el = $<HTMLSelectElement>("#cfg-rope-scaling");
+    if (el) el.value = cfg.ropeScaling;
+  }
+  if (cfg.ropeScale !== undefined) {
+    const el = $<HTMLInputElement>("#cfg-rope-scale");
+    if (el) el.value = String(cfg.ropeScale);
+  }
+  if (cfg.ropeFreqBase !== undefined) {
+    const el = $<HTMLInputElement>("#cfg-rope-freq-base");
+    if (el) el.value = String(cfg.ropeFreqBase);
+  }
+
+  // Vision Projector & Drafter Model (MTP)
+  const mmprojInput = document.querySelector<HTMLInputElement>("#cfg-mmproj");
+  if (mmprojInput && cfg.mmprojPath !== undefined) mmprojInput.value = cfg.mmprojPath;
+
+  const draftInput = document.querySelector<HTMLInputElement>("#cfg-draft-model");
+  if (draftInput && cfg.draftModelPath !== undefined) draftInput.value = cfg.draftModelPath;
+
+  const draftTokens = document.querySelector<HTMLInputElement>("#cfg-draft-tokens");
+  if (draftTokens && cfg.draftMaxTokens !== undefined) draftTokens.value = String(cfg.draftMaxTokens);
+
+  const draftLayers = document.querySelector<HTMLInputElement>("#cfg-draft-layers");
+  if (draftLayers && cfg.draftGpuLayers !== undefined) draftLayers.value = String(cfg.draftGpuLayers);
+
+  const draftType = document.querySelector<HTMLSelectElement>("#cfg-draft-type");
+  if (draftType && cfg.draftSpecType !== undefined) draftType.value = cfg.draftSpecType;
+
+  // Reasoning & Thinking Settings
+  const rFormat = document.querySelector<HTMLSelectElement>("#cfg-reasoning-format");
+  if (rFormat && cfg.reasoningFormat) rFormat.value = cfg.reasoningFormat;
+
+  const rEffort = document.querySelector<HTMLSelectElement>("#cfg-reasoning-effort");
+  if (rEffort && cfg.reasoningEffort) rEffort.value = cfg.reasoningEffort;
+
+  const rJinja = document.querySelector<HTMLInputElement>("#cfg-enable-jinja");
+  if (rJinja && cfg.enableJinja !== undefined) rJinja.checked = cfg.enableJinja;
+
+  updateLinkedModelsBadge();
+  updateConfigModelBadge(cfg.modelPath);
+}
+
+async function loadConfigForModel(modelPath: string) {
+  if (!modelPath) {
+    updateConfigModelBadge("");
+    return;
+  }
+  try {
+    const cfg = await LlamaService.getModelConfig(modelPath);
+    applyConfigToUI(cfg);
+
+    // If mmprojPath wasn't saved in the config, try autodetecting an adjacent projector
+    const mmprojInput = document.querySelector<HTMLInputElement>("#cfg-mmproj");
+    if (mmprojInput && !mmprojInput.value.trim()) {
+      try {
+        const detected = await LlamaService.autoDetectMMProj(modelPath);
+        if (detected) {
+          mmprojInput.value = detected;
+          updateLinkedModelsBadge();
+          showToast(`Auto-linked vision projector: ${detected.split(/[/\\]/).pop()}`, "info", "Vision Projector Found");
+        }
+      } catch {}
+    }
+  } catch (err) {
+    console.error("Failed to load model config for", modelPath, err);
+  }
+}
+
 async function loadConfig() {
   try {
-    const cfg = await LlamaService.getServerConfig();
-    $<HTMLInputElement>("#cfg-host").value = cfg.host || "127.0.0.1";
-    $<HTMLInputElement>("#cfg-port").value = String(cfg.port || 8080);
-    $<HTMLInputElement>("#quick-port").value = String(cfg.port || 8080);
-    if (cfg.host) currentServerHost = cfg.host;
-    if (cfg.port) currentServerPort = cfg.port;
-    $<HTMLInputElement>("#cfg-gpu-layers").value = String(cfg.gpuLayers ?? 99);
-    $("#cfg-gpu-layers-val").textContent = String(cfg.gpuLayers ?? 99);
-    $<HTMLSelectElement>("#cfg-context").value = String(cfg.contextSize || 4096);
-    $<HTMLInputElement>("#cfg-flash-attn").checked = cfg.flashAttention ?? true;
-    $<HTMLInputElement>("#cfg-extra-args").value = cfg.extraArgs || "";
+    const quickSelect = $<HTMLSelectElement>("#quick-model-select");
+    const activeModel = quickSelect?.value;
+    if (activeModel) {
+      await loadConfigForModel(activeModel);
+    } else {
+      const cfg = await LlamaService.getServerConfig();
+      applyConfigToUI(cfg);
+    }
 
     const routerCheck = $<HTMLInputElement>("#cfg-router-mode");
-    if (routerCheck) {
-      routerCheck.checked = cfg.routerMode ?? false;
+    if (routerCheck && !routerCheck.dataset.listenerAttached) {
+      routerCheck.dataset.listenerAttached = "true";
       routerCheck.addEventListener("change", () => {
         updateRouterModeUI(routerCheck.checked);
       });
-      updateRouterModeUI(cfg.routerMode ?? false);
     }
-
-    // Advanced Sampling
-    $<HTMLInputElement>("#cfg-temp").value = String(cfg.temperature ?? 0.70);
-    $<HTMLInputElement>("#cfg-top-p").value = String(cfg.topP ?? 0.90);
-    $<HTMLInputElement>("#cfg-top-k").value = String(cfg.topK ?? 40);
-    $<HTMLInputElement>("#cfg-min-p").value = String(cfg.minP ?? 0.05);
-    $<HTMLInputElement>("#cfg-typical").value = String(cfg.typicalP ?? 1.00);
-    $<HTMLInputElement>("#cfg-repeat-penalty").value = String(cfg.repeatPenalty ?? 1.10);
-    $<HTMLInputElement>("#cfg-repeat-last-n").value = String(cfg.repeatLastN ?? 64);
-    $<HTMLInputElement>("#cfg-presence-penalty").value = String(cfg.presencePenalty ?? 0.0);
-    $<HTMLInputElement>("#cfg-frequency-penalty").value = String(cfg.frequencyPenalty ?? 0.0);
-    $<HTMLInputElement>("#cfg-max-predict").value = String(cfg.maxPredict ?? -1);
-    $<HTMLInputElement>("#cfg-seed").value = String(cfg.seed ?? -1);
-
-    // Memory & KV Cache
-    $<HTMLInputElement>("#cfg-micro-batch").value = String(cfg.microBatchSize || 512);
-    $<HTMLSelectElement>("#cfg-cache-type-k").value = cfg.cacheTypeK || "f16";
-    $<HTMLSelectElement>("#cfg-cache-type-v").value = cfg.cacheTypeV || "f16";
-    $<HTMLInputElement>("#cfg-mlock").checked = cfg.mlock ?? false;
-    $<HTMLInputElement>("#cfg-no-mmap").checked = cfg.noMmap ?? false;
-
-    // Concurrency & Server
-    $<HTMLInputElement>("#cfg-parallel-slots").value = String(cfg.parallelSlots || 1);
-    $<HTMLInputElement>("#cfg-cont-batching").checked = cfg.contBatching ?? true;
-    $<HTMLInputElement>("#cfg-threads-http").value = String(cfg.threadsHttp || 0);
-    $<HTMLInputElement>("#cfg-threads-batch").value = String(cfg.threadsBatch || 0);
-    $<HTMLInputElement>("#cfg-embedding").checked = cfg.embedding ?? false;
-    $<HTMLInputElement>("#cfg-metrics").checked = cfg.metrics ?? false;
-
-    // Multi-GPU & RoPE
-    $<HTMLInputElement>("#cfg-main-gpu").value = String(cfg.mainGpu || 0);
-    $<HTMLSelectElement>("#cfg-split-mode").value = cfg.splitMode || "none";
-    $<HTMLSelectElement>("#cfg-rope-scaling").value = cfg.ropeScaling || "none";
-    $<HTMLInputElement>("#cfg-rope-scale").value = String(cfg.ropeScale || 1.0);
-    $<HTMLInputElement>("#cfg-rope-freq-base").value = String(cfg.ropeFreqBase || 0);
-
-    // Vision Projector & Drafter Model (MTP)
-    const mmprojInput = document.querySelector<HTMLInputElement>("#cfg-mmproj");
-    if (mmprojInput) mmprojInput.value = cfg.mmprojPath || "";
-
-    const draftInput = document.querySelector<HTMLInputElement>("#cfg-draft-model");
-    if (draftInput) draftInput.value = cfg.draftModelPath || "";
-
-    const draftTokens = document.querySelector<HTMLInputElement>("#cfg-draft-tokens");
-    if (draftTokens) draftTokens.value = String(cfg.draftMaxTokens || 4);
-
-    const draftLayers = document.querySelector<HTMLInputElement>("#cfg-draft-layers");
-    if (draftLayers) draftLayers.value = String(cfg.draftGpuLayers ?? 99);
-
-    const draftType = document.querySelector<HTMLSelectElement>("#cfg-draft-type");
-    if (draftType) draftType.value = cfg.draftSpecType || "none";
-
-    // Reasoning & Thinking Settings
-    const rFormat = document.querySelector<HTMLSelectElement>("#cfg-reasoning-format");
-    if (rFormat) rFormat.value = cfg.reasoningFormat || "deepseek-legacy";
-
-    const rEffort = document.querySelector<HTMLSelectElement>("#cfg-reasoning-effort");
-    if (rEffort) rEffort.value = cfg.reasoningEffort || "default";
-
-    const rJinja = document.querySelector<HTMLInputElement>("#cfg-enable-jinja");
-    if (rJinja) rJinja.checked = cfg.enableJinja ?? true;
-
-    updateLinkedModelsBadge();
   } catch (err) {
     console.error("Load config error:", err);
   }
@@ -1075,6 +1246,7 @@ function setupActions() {
       await loadModels();
       const quickSelect = $<HTMLSelectElement>("#quick-model-select");
       quickSelect.value = imported.path;
+      await loadConfigForModel(imported.path);
       showToast(`Imported model: ${imported.name} (${imported.sizeFormatted})`, "success", "Model Imported");
     } catch (err: any) {
       showToast(`Import failed: ${err.message || err}`, "error", "Import Error");
@@ -1144,8 +1316,18 @@ function setupActions() {
 
   $("#btn-save-config").addEventListener("click", async () => {
     const cfg = collectConfigFromUI();
-    await LlamaService.saveServerConfig(cfg);
-    showToast("Configuration & advanced parameters saved successfully.", "success", "Settings Saved");
+    try {
+      if (cfg.modelPath) {
+        await LlamaService.saveModelConfig(cfg.modelPath, cfg);
+        const fileName = cfg.modelPath.split(/[/\\]/).pop()?.replace(/\.gguf$/i, "") + ".json";
+        showToast(`Saved parameters to ${fileName}`, "success", "Model Config Saved");
+      } else {
+        await LlamaService.saveServerConfig(cfg);
+        showToast("Global configuration saved successfully.", "success", "Settings Saved");
+      }
+    } catch (err: any) {
+      showToast(`Failed to save configuration: ${err.message || err}`, "error", "Save Failed");
+    }
   });
 
   $("#btn-clear-logs").addEventListener("click", () => {

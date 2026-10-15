@@ -75,7 +75,7 @@ func NewLlamaService(appDataDir string) *LlamaService {
 		hwInfo:     hw,
 		releaseMgr: NewReleaseManager(binDir, appDataDir),
 		modelMgr:   NewModelManager(modelsDir, appDataDir),
-		serverMgr:  NewServerManager(binDir),
+		serverMgr:  NewServerManager(binDir, appDataDir),
 	}
 
 	svc.serverMgr.SetLogCallback(func(line string) {
@@ -498,9 +498,23 @@ func (s *LlamaService) GetServerConfig() ServerConfig {
 	return s.serverMgr.GetConfig()
 }
 
+// GetModelConfig retrieves the unique configuration JSON for a specific model file.
+func (s *LlamaService) GetModelConfig(modelPath string) (ServerConfig, error) {
+	return s.serverMgr.GetModelConfig(modelPath)
+}
+
+// SaveModelConfig saves configuration for a specific model to its individual JSON file.
+func (s *LlamaService) SaveModelConfig(modelPath string, cfg ServerConfig) error {
+	return s.serverMgr.SaveModelConfig(modelPath, cfg)
+}
+
 // SaveServerConfig updates the server configuration without starting it.
-func (s *LlamaService) SaveServerConfig(cfg ServerConfig) {
+func (s *LlamaService) SaveServerConfig(cfg ServerConfig) error {
+	if cfg.ModelPath != "" {
+		return s.serverMgr.SaveModelConfig(cfg.ModelPath, cfg)
+	}
 	s.serverMgr.SaveConfig(cfg)
+	return nil
 }
 
 // StartServer launches llama-server.exe with the specified configuration.

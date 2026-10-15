@@ -101,6 +101,7 @@ type ServerStatus struct {
 
 type ServerManager struct {
 	binDir         string
+	appDataDir     string
 	cmd            *exec.Cmd
 	cfg            ServerConfig
 	running        bool
@@ -113,39 +114,149 @@ type ServerManager struct {
 	lastError      string
 }
 
-func NewServerManager(binDir string) *ServerManager {
-	return &ServerManager{
-		binDir:  binDir,
-		maxLogs: 1000,
-		cfg: ServerConfig{
-			Host:             "127.0.0.1",
-			Port:             8080,
-			GPULayers:        99,
-			ContextSize:      4096,
-			Threads:          6,
-			BatchSize:        512,
-			FlashAttention:   true,
-			Temperature:      0.7,
-			TopP:             0.9,
-			TopK:             40,
-			MinP:             0.05,
-			TypicalP:         1.0,
-			RepeatPenalty:    1.1,
-			RepeatLastN:      64,
-			MaxPredict:       -1,
-			Seed:             -1,
-			MicroBatchSize:   512,
-			CacheTypeK:       "f16",
-			CacheTypeV:       "f16",
-			ParallelSlots:    1,
-			ContBatching:     true,
-			RoPEScaling:      "none",
-			SplitMode:        "none",
-			ReasoningFormat:  "deepseek-legacy",
-			ReasoningEffort:  "default",
-			EnableJinja:      true,
-		},
+func getDefaultServerConfig() ServerConfig {
+	return ServerConfig{
+		Host:             "127.0.0.1",
+		Port:             8080,
+		GPULayers:        99,
+		ContextSize:      4096,
+		Threads:          6,
+		BatchSize:        512,
+		FlashAttention:   true,
+		Temperature:      0.7,
+		TopP:             0.9,
+		TopK:             40,
+		MinP:             0.05,
+		TypicalP:         1.0,
+		RepeatPenalty:    1.1,
+		RepeatLastN:      64,
+		MaxPredict:       -1,
+		Seed:             -1,
+		MicroBatchSize:   512,
+		CacheTypeK:       "f16",
+		CacheTypeV:       "f16",
+		ParallelSlots:    1,
+		ContBatching:     true,
+		RoPEScaling:      "none",
+		SplitMode:        "none",
+		ReasoningFormat:  "deepseek-legacy",
+		ReasoningEffort:  "default",
+		EnableJinja:      true,
 	}
+}
+
+func NewServerManager(binDir, appDataDir string) *ServerManager {
+	return &ServerManager{
+		binDir:     binDir,
+		appDataDir: appDataDir,
+		maxLogs:    1000,
+		cfg:        getDefaultServerConfig(),
+	}
+}
+
+func (sm *ServerManager) getModelConfigFilePaths(modelPath string) (primaryPath, fallbackPath string) {
+	if modelPath == "" {
+		return "", ""
+	}
+	dir := filepath.Dir(modelPath)
+	base := filepath.Base(modelPath)
+	baseNoExt := strings.TrimSuffix(base, filepath.Ext(base))
+
+	// 1. Primary path alongside the model file (e.g. models/model-name.json)
+	primaryPath = filepath.Join(dir, baseNoExt+".json")
+
+	// 2. Fallback path in appDataDir/model_configs/<baseNoExt>.json
+	if sm.appDataDir != "" {
+		fallbackDir := filepath.Join(sm.appDataDir, "model_configs")
+		_ = os.MkdirAll(fallbackDir, 0755)
+		fallbackPath = filepath.Join(fallbackDir, baseNoExt+".json")
+	}
+	return primaryPath, fallbackPath
+}
+
+// GetModelConfig retrieves the configuration JSON for a specific model.
+func (sm *ServerManager) GetModelConfig(modelPath string) (ServerConfig, error) {
+	defaultCfg := getDefaultServerConfig()
+	defaultCfg.ModelPath = modelPath
+
+	if modelPath == "" {
+		sm.mu.Lock()
+		cur := sm.cfg
+		sm.mu.Unlock()
+		return cur, nil
+	}
+
+	primaryPath, fallbackPath := sm.getModelConfigFilePaths(modelPath)
+
+	// Check primary path (<baseNoExt>.json)
+	if data, err := os.ReadFile(primaryPath); err == nil {
+		var cfg ServerConfig
+		if err := json.Unmarshal(data, &cfg); err == nil {
+			if cfg.ModelPath == "" {
+				cfg.ModelPath = modelPath
+			}
+			return cfg, nil
+		}
+	}
+
+	// Check <modelPath>.json (in case of double extension e.g. model.gguf.json)
+	if data, err := os.ReadFile(modelPath + ".json"); err == nil {
+		var cfg ServerConfig
+		if err := json.Unmarshal(data, &cfg); err == nil {
+			if cfg.ModelPath == "" {
+				cfg.ModelPath = modelPath
+			}
+			return cfg, nil
+		}
+	}
+
+	// Check fallback path in AppData
+	if fallbackPath != "" {
+		if data, err := os.ReadFile(fallbackPath); err == nil {
+			var cfg ServerConfig
+			if err := json.Unmarshal(data, &cfg); err == nil {
+				if cfg.ModelPath == "" {
+					cfg.ModelPath = modelPath
+				}
+				return cfg, nil
+			}
+		}
+	}
+
+	return defaultCfg, nil
+}
+
+// SaveModelConfig writes the model's configuration into its individual JSON file.
+func (sm *ServerManager) SaveModelConfig(modelPath string, cfg ServerConfig) error {
+	if modelPath == "" {
+		modelPath = cfg.ModelPath
+	}
+	if modelPath == "" {
+		return fmt.Errorf("no model path specified")
+	}
+	cfg.ModelPath = modelPath
+
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	primaryPath, fallbackPath := sm.getModelConfigFilePaths(modelPath)
+
+	var writeErr error
+	if primaryPath != "" {
+		writeErr = os.WriteFile(primaryPath, data, 0644)
+	}
+
+	if fallbackPath != "" {
+		_ = os.WriteFile(fallbackPath, data, 0644)
+	}
+
+	sm.mu.Lock()
+	sm.cfg = cfg
+	sm.mu.Unlock()
+
+	return writeErr
 }
 
 func (sm *ServerManager) SetBinDir(dir string) {
@@ -225,6 +336,11 @@ func (sm *ServerManager) Start(cfg ServerConfig) error {
 
 	sm.cfg = cfg
 	sm.lastError = ""
+
+	// Automatically save this configuration for the model to its individual JSON file
+	if !cfg.RouterMode && cfg.ModelPath != "" {
+		_ = sm.SaveModelConfig(cfg.ModelPath, cfg)
+	}
 
 	// Build arguments
 	args := []string{
