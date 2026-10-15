@@ -4,6 +4,7 @@ export interface ChatNode {
   childrenIds: string[];
   role: "user" | "assistant" | "system";
   content: string;
+  images?: string[];
   createdAt: number;
 }
 
@@ -152,7 +153,8 @@ function generateNodeId(): string {
 export function addMessageToSession(
   session: ChatSession,
   role: "user" | "assistant" | "system",
-  content: string
+  content: string,
+  images?: string[]
 ): ChatNode {
   const id = generateNodeId();
   const parentId = session.activeNodeId;
@@ -163,6 +165,7 @@ export function addMessageToSession(
     childrenIds: [],
     role,
     content,
+    images: images && images.length > 0 ? images : undefined,
     createdAt: Date.now(),
   };
 
@@ -177,7 +180,8 @@ export function addMessageToSession(
   session.activeNodeId = id;
 
   if (session.title === "New Conversation" && role === "user") {
-    session.title = content.slice(0, 32).trim() + (content.length > 32 ? "..." : "");
+    const textPreview = content.trim() || (images && images.length > 0 ? "[Image Prompt]" : "New Conversation");
+    session.title = textPreview.slice(0, 32).trim() + (textPreview.length > 32 ? "..." : "");
   }
 
   saveSession(session);
@@ -187,10 +191,11 @@ export function addMessageToSession(
 export function editMessageNode(
   session: ChatSession,
   targetNodeId: string,
-  newContent: string
+  newContent: string,
+  newImages?: string[]
 ): ChatNode {
   const oldNode = session.nodes[targetNodeId];
-  if (!oldNode) return addMessageToSession(session, "user", newContent);
+  if (!oldNode) return addMessageToSession(session, "user", newContent, newImages);
 
   const newNodeId = generateNodeId();
   const parentId = oldNode.parentId;
@@ -201,6 +206,7 @@ export function editMessageNode(
     childrenIds: [],
     role: oldNode.role,
     content: newContent,
+    images: newImages !== undefined ? newImages : oldNode.images,
     createdAt: Date.now(),
   };
 

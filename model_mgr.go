@@ -525,3 +525,65 @@ func formatBytes(b int64) string {
 	}
 	return fmt.Sprintf("%.1f %cB", float64(b)/float64(div), "KMGTPE"[exp])
 }
+
+// AutoDetectMMProj searches for an associated vision projector (mmproj) for a model.
+func (mm *ModelManager) AutoDetectMMProj(modelPath string) string {
+	if modelPath == "" {
+		return ""
+	}
+	dir := filepath.Dir(modelPath)
+	base := filepath.Base(modelPath)
+	baseNoExt := strings.TrimSuffix(base, filepath.Ext(base))
+
+	// 1. Search in the same directory as the model
+	if entries, err := os.ReadDir(dir); err == nil {
+		// First pass: match with model name prefix or common pattern
+		for _, e := range entries {
+			if e.IsDir() {
+				continue
+			}
+			name := strings.ToLower(e.Name())
+			if strings.HasSuffix(name, ".gguf") && strings.Contains(name, "mmproj") {
+				lowerBase := strings.ToLower(baseNoExt)
+				prefixLen := len(lowerBase)
+				if prefixLen > 8 {
+					prefixLen = 8
+				}
+				if strings.Contains(name, lowerBase[:prefixLen]) {
+					return filepath.Join(dir, e.Name())
+				}
+			}
+		}
+		// Second pass: any mmproj in the model's directory
+		for _, e := range entries {
+			if e.IsDir() {
+				continue
+			}
+			name := strings.ToLower(e.Name())
+			if strings.HasSuffix(name, ".gguf") && strings.Contains(name, "mmproj") {
+				return filepath.Join(dir, e.Name())
+			}
+		}
+	}
+
+	// 2. Search in default models directory
+	mm.mu.Lock()
+	modelsDir := mm.modelsDir
+	mm.mu.Unlock()
+
+	if modelsDir != "" && modelsDir != dir {
+		if entries, err := os.ReadDir(modelsDir); err == nil {
+			for _, e := range entries {
+				if e.IsDir() {
+					continue
+				}
+				name := strings.ToLower(e.Name())
+				if strings.HasSuffix(name, ".gguf") && strings.Contains(name, "mmproj") {
+					return filepath.Join(modelsDir, e.Name())
+				}
+			}
+		}
+	}
+
+	return ""
+}

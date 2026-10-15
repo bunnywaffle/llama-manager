@@ -39,7 +39,7 @@ export interface BackendVariantInfo {
 /** ChatMessage represents a message in OpenAI compatible chat format. */
 export interface ChatMessage {
   role: string;
-  content: string;
+  content: unknown;
 }
 
 export interface DiagnosticItem {
@@ -195,6 +195,8 @@ export interface ServerStatus {
   slotsTotal: number;
   slotsBusy: number;
   errorMsg?: string;
+  hasVision: boolean;
+  mmprojPath?: string;
 }
 
 export interface TroubleshootReport {
@@ -215,6 +217,10 @@ export interface Window {}
 
 /** LlamaService is the bound Go service callable from TypeScript. */
 export const LlamaService = {
+  /** AutoDetectMMProj searches for an associated vision projector (mmproj) for a model. */
+  autoDetectMMProj(modelPath: string): Promise<string> {
+    return call("LlamaService.AutoDetectMMProj", modelPath);
+  },
   /** CheckReleases queries GitHub for recent llama.cpp releases. */
   checkReleases(): Promise<ReleaseInfo[]> {
     return call("LlamaService.CheckReleases");

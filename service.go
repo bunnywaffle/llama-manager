@@ -593,3 +593,9 @@ func (s *LlamaService) KillZombieServers() error {
 	return KillZombieProcesses()
 }
 
+// AutoDetectMMProj searches for an associated vision projector (mmproj) for a model.
+func (s *LlamaService) AutoDetectMMProj(modelPath string) string {
+	return s.modelMgr.AutoDetectMMProj(modelPath)
+}
+
+

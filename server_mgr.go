@@ -95,6 +95,8 @@ type ServerStatus struct {
 	SlotsTotal    int     `json:"slotsTotal"`
 	SlotsBusy     int     `json:"slotsBusy"`
 	ErrorMsg      string  `json:"errorMsg,omitempty"`
+	HasVision     bool    `json:"hasVision"`
+	MMProjPath    string  `json:"mmprojPath,omitempty"`
 }
 
 type ServerManager struct {
@@ -511,12 +513,21 @@ func (sm *ServerManager) Stop() error {
 }
 
 func (sm *ServerManager) getStatusLocked() ServerStatus {
+	hasVision := strings.TrimSpace(sm.cfg.MMProjPath) != ""
+	if hasVision {
+		if _, err := os.Stat(sm.cfg.MMProjPath); err != nil {
+			hasVision = false
+		}
+	}
+
 	status := ServerStatus{
 		Running:     sm.running,
 		Host:        sm.cfg.Host,
 		Port:        sm.cfg.Port,
 		ActiveModel: filepath.Base(sm.cfg.ModelPath),
 		ErrorMsg:    sm.lastError,
+		HasVision:   hasVision,
+		MMProjPath:  sm.cfg.MMProjPath,
 	}
 
 	if sm.running && sm.cmd != nil && sm.cmd.Process != nil {
@@ -632,8 +643,8 @@ func (sm *ServerManager) addLog(line string) {
 
 // ChatMessage represents a message in OpenAI compatible chat format.
 type ChatMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role    string      `json:"role"`
+	Content interface{} `json:"content"`
 }
 
 // SendChatMessage proxies chat request to running llama-server with an optional reasoning effort.

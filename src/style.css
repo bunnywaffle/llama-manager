@@ -1006,6 +1006,16 @@ table.data-table tr:hover td {
   color: var(--text-low);
 }
 
+.chat-model-pill.vision-pill {
+  background: rgba(16, 185, 129, 0.12);
+  border-color: rgba(16, 185, 129, 0.35);
+  color: #10b981;
+}
+
+.chat-model-pill.vision-pill svg {
+  color: #10b981;
+}
+
 .chat-stage-controls {
   display: flex;
   align-items: center;
@@ -1663,10 +1673,152 @@ table.data-table tr:hover td {
   transform: scale(0.96);
 }
 
+.chat-attach-btn {
+  background: transparent;
+  color: var(--text-medium);
+  border: none;
+  border-radius: 7px;
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: color 0.15s ease, background 0.15s ease, transform 0.1s ease;
+}
+
+.chat-attach-btn:hover {
+  color: #10b981;
+  background: rgba(16, 185, 129, 0.12);
+  transform: scale(1.05);
+}
+
+.chat-attach-btn:active {
+  transform: scale(0.95);
+}
+
+.chat-attach-btn svg {
+  width: 16px;
+  height: 16px;
+  stroke-width: 1.8;
+}
+
+.chat-image-previews {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 4px 2px 6px;
+}
+
+.chat-image-thumb-card {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  padding: 4px 8px 4px 4px;
+  max-width: 240px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+  animation: fadeIn 0.15s ease-out;
+}
+
+.chat-image-thumb {
+  width: 36px;
+  height: 36px;
+  object-fit: cover;
+  border-radius: 6px;
+  border: 1px solid var(--border-subtle);
+  flex-shrink: 0;
+}
+
+.chat-image-thumb-info {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  font-size: 11px;
+}
+
+.chat-image-thumb-name {
+  color: var(--text-high);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: 500;
+  max-width: 140px;
+}
+
+.chat-image-thumb-size {
+  color: var(--text-low);
+  font-size: 10px;
+}
+
+.chat-image-thumb-remove {
+  background: transparent;
+  border: none;
+  color: var(--text-low);
+  cursor: pointer;
+  padding: 3px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.15s, background 0.15s;
+}
+
+.chat-image-thumb-remove:hover {
+  color: var(--status-red, #ef4444);
+  background: rgba(239, 68, 68, 0.12);
+}
+
+.chat-image-thumb-remove svg {
+  width: 13px;
+  height: 13px;
+}
+
+/* Chat Entry Images in Message Bubbles */
+.chat-entry-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.chat-entry-image-wrap {
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  max-width: 340px;
+  max-height: 260px;
+  cursor: zoom-in;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+  background: rgba(0, 0, 0, 0.25);
+}
+
+.chat-entry-image-wrap:hover {
+  transform: scale(1.015);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+}
+
+.chat-entry-img {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: 260px;
+  object-fit: contain;
+}
+
+.chat-drop-active {
+  border-color: #10b981 !important;
+  box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.25) !important;
+}
+
 .chat-bar-hints {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: space-between;
   font-size: 10.5px;
   color: var(--text-low);
   padding: 0 2px;

@@ -241,7 +241,157 @@ function renderMarkdown(raw: string): string {
 let isServerRunning = false;
 let currentServerHost = "127.0.0.1";
 let currentServerPort = 8080;
+let currentServerStatus: ServerStatus | null = null;
 let chatHistory: ChatMessage[] = [];
+
+interface AttachedImage {
+  dataUrl: string;
+  name: string;
+  sizeFormatted: string;
+}
+let pendingChatImages: AttachedImage[] = [];
+
+function formatBytes(b: number): string {
+  if (b < 1024) return `${b} B`;
+  const kb = b / 1024;
+  if (kb < 1024) return `${kb.toFixed(1)} KB`;
+  const mb = kb / 1024;
+  return `${mb.toFixed(1)} MB`;
+}
+
+function isVisionActive(): boolean {
+  if (isServerRunning) {
+    return Boolean(currentServerStatus?.hasVision);
+  }
+  const mmVal = document.querySelector<HTMLInputElement>("#cfg-mmproj")?.value.trim();
+  return Boolean(mmVal);
+}
+
+function updateVisionUI() {
+  const active = isVisionActive();
+  const attachBtn = document.querySelector<HTMLButtonElement>("#btn-chat-attach-image");
+  const visionBadge = document.querySelector<HTMLElement>("#chat-vision-badge");
+  const visionHint = document.querySelector<HTMLElement>("#chat-vision-hint");
+  const chatInput = document.querySelector<HTMLTextAreaElement>("#chat-input");
+
+  if (attachBtn) {
+    attachBtn.style.display = active ? "inline-flex" : "none";
+  }
+  if (visionBadge) {
+    visionBadge.style.display = active ? "inline-flex" : "none";
+  }
+  if (visionHint) {
+    visionHint.style.display = active ? "inline-flex" : "none";
+  }
+  if (chatInput) {
+    if (active) {
+      chatInput.placeholder = "Send a message or ask about your image... (Enter to send, Shift+Enter for newline)";
+    } else {
+      chatInput.placeholder = "Send a message to your model... (Enter to send, Shift+Enter for newline)";
+      if (pendingChatImages.length > 0) {
+        pendingChatImages = [];
+        renderChatImagePreviews();
+      }
+    }
+  }
+  renderIcons();
+}
+
+function renderChatImagePreviews() {
+  const container = document.querySelector<HTMLElement>("#chat-image-previews");
+  if (!container) return;
+
+  if (pendingChatImages.length === 0) {
+    container.style.display = "none";
+    container.innerHTML = "";
+    return;
+  }
+
+  container.style.display = "flex";
+  container.innerHTML = "";
+
+  pendingChatImages.forEach((img, idx) => {
+    const card = document.createElement("div");
+    card.className = "chat-image-thumb-card";
+
+    const thumb = document.createElement("img");
+    thumb.src = img.dataUrl;
+    thumb.alt = img.name;
+    thumb.className = "chat-image-thumb";
+
+    const info = document.createElement("div");
+    info.className = "chat-image-thumb-info";
+
+    const nameSpan = document.createElement("span");
+    nameSpan.className = "chat-image-thumb-name";
+    nameSpan.textContent = img.name;
+
+    const sizeSpan = document.createElement("span");
+    sizeSpan.className = "chat-image-thumb-size";
+    sizeSpan.textContent = img.sizeFormatted;
+
+    info.appendChild(nameSpan);
+    info.appendChild(sizeSpan);
+
+    const removeBtn = document.createElement("button");
+    removeBtn.type = "button";
+    removeBtn.className = "chat-image-thumb-remove";
+    removeBtn.title = "Remove image";
+    removeBtn.innerHTML = `<i data-lucide="x"></i>`;
+    removeBtn.addEventListener("click", () => {
+      pendingChatImages.splice(idx, 1);
+      renderChatImagePreviews();
+    });
+
+    card.appendChild(thumb);
+    card.appendChild(info);
+    card.appendChild(removeBtn);
+    container.appendChild(card);
+  });
+
+  renderIcons();
+}
+
+function addChatImageFile(file: File) {
+  if (!file.type.startsWith("image/")) {
+    showToast("Please select a valid image file (PNG, JPEG, WebP, GIF, BMP).", "warning", "Invalid File");
+    return;
+  }
+  if (!isVisionActive()) {
+    showToast("Vision adaptor (--mmproj) is not attached. Attach a vision projector in Configuration to input images.", "warning", "Vision Adaptor Required");
+    return;
+  }
+  if (pendingChatImages.length >= 4) {
+    showToast("Maximum of 4 images can be attached per prompt.", "warning", "Limit Reached");
+    return;
+  }
+
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    const dataUrl = e.target?.result as string;
+    pendingChatImages.push({
+      dataUrl,
+      name: file.name,
+      sizeFormatted: formatBytes(file.size),
+    });
+    renderChatImagePreviews();
+  };
+  reader.readAsDataURL(file);
+}
+
+function openImageModal(src: string) {
+  const overlay = document.createElement("div");
+  overlay.className = "modal-overlay";
+  overlay.style.cssText = "display: flex; align-items: center; justify-content: center; z-index: 9999; background: rgba(0,0,0,0.85); cursor: zoom-out;";
+  overlay.innerHTML = `
+    <div style="position: relative; max-width: 90vw; max-height: 90vh;">
+      <img src="${src}" style="max-width: 90vw; max-height: 90vh; border-radius: 8px; box-shadow: 0 10px 40px rgba(0,0,0,0.5); object-fit: contain;" />
+      <button style="position: absolute; top: -14px; right: -14px; background: #ef4444; color: #fff; border: none; border-radius: 50%; width: 28px; height: 28px; cursor: pointer; font-size: 16px; font-weight: bold; display: flex; align-items: center; justify-content: center;">&times;</button>
+    </div>
+  `;
+  overlay.addEventListener("click", () => overlay.remove());
+  document.body.appendChild(overlay);
+}
 
 async function init() {
   renderIcons();
@@ -433,11 +583,29 @@ async function loadModels() {
       tbody.appendChild(tr);
     });
 
+    quickSelect.addEventListener("change", async () => {
+      const selectedPath = quickSelect.value;
+      if (selectedPath) {
+        const mmprojInput = document.querySelector<HTMLInputElement>("#cfg-mmproj");
+        if (mmprojInput && !mmprojInput.value.trim()) {
+          try {
+            const detected = await LlamaService.autoDetectMMProj(selectedPath);
+            if (detected) {
+              mmprojInput.value = detected;
+              updateLinkedModelsBadge();
+              showToast(`Auto-linked vision projector: ${detected.split(/[/\\]/).pop()}`, "info", "Vision Projector Found");
+            }
+          } catch {}
+        }
+      }
+    });
+
     $$(".btn-run-model").forEach((b) => {
       b.addEventListener("click", async () => {
         const p = b.getAttribute("data-path");
         if (p) {
           quickSelect.value = p;
+          quickSelect.dispatchEvent(new Event("change"));
           const nav = document.querySelector<HTMLElement>('[data-tab="dashboard"]');
           nav?.click();
           await startServerHandler();
@@ -450,6 +618,7 @@ async function loadModels() {
         const p = b.getAttribute("data-path");
         if (p) {
           quickSelect.value = p;
+          quickSelect.dispatchEvent(new Event("change"));
           const nav = document.querySelector<HTMLElement>('[data-tab="dashboard"]');
           nav?.click();
         }
@@ -616,6 +785,7 @@ function updateLinkedModelsBadge() {
     meta.textContent = "None active";
     meta.style.color = "var(--text-low)";
   }
+  updateVisionUI();
 }
 
 function updateRouterModeUI(enabled: boolean) {
@@ -727,8 +897,10 @@ async function loadServerStatus() {
 
 function updateServerUI(st: ServerStatus) {
   isServerRunning = st.running;
+  currentServerStatus = st;
   if (st.host) currentServerHost = st.host;
   if (st.port) currentServerPort = st.port;
+  updateVisionUI();
   const pill = $("#server-status-pill");
   const pillText = $("#server-status-text");
   const quickBtn = $("#btn-quick-toggle");
@@ -1983,7 +2155,25 @@ function setupChat() {
       if (node.role === "assistant") {
         renderBubbleContent(bubble, node.content, false);
       } else {
-        bubble.innerHTML = renderMarkdown(node.content);
+        let userHtml = "";
+        if (node.images && node.images.length > 0) {
+          userHtml += `<div class="chat-entry-images">`;
+          node.images.forEach((imgUrl) => {
+            userHtml += `<div class="chat-entry-image-wrap" title="Click to view full image"><img src="${imgUrl}" alt="Attached image" class="chat-entry-img" /></div>`;
+          });
+          userHtml += `</div>`;
+        }
+        if (node.content) {
+          userHtml += renderMarkdown(node.content);
+        }
+        bubble.innerHTML = userHtml;
+
+        bubble.querySelectorAll<HTMLImageElement>(".chat-entry-img").forEach((img) => {
+          img.addEventListener("click", () => {
+            openImageModal(img.src);
+          });
+        });
+
         renderIcons();
       }
 
@@ -2151,7 +2341,7 @@ function setupChat() {
       if (!updatedText) return;
 
       editForm.remove();
-      editMessageNode(currentSession, node.id, updatedText);
+      editMessageNode(currentSession, node.id, updatedText, node.images);
       renderSessions();
       renderStage();
 
@@ -2205,7 +2395,24 @@ function setupChat() {
 
     const messagesToSend = getActiveConversationPath(currentSession)
       .filter((n) => n.id !== targetNode.id)
-      .map((n) => ({ role: n.role as "user" | "assistant", content: n.content }));
+      .map((n) => {
+        if (n.role === "user" && n.images && n.images.length > 0) {
+          const parts: any[] = [];
+          if (n.content && n.content.trim()) {
+            parts.push({ type: "text", text: n.content.trim() });
+          } else {
+            parts.push({ type: "text", text: "Describe this image in detail." });
+          }
+          n.images.forEach((img) => {
+            parts.push({
+              type: "image_url",
+              image_url: { url: img },
+            });
+          });
+          return { role: n.role, content: parts };
+        }
+        return { role: n.role, content: n.content };
+      });
 
     // Inject persona system prompt
     const persona = getPersonaById(currentSession.personaId);
@@ -2349,11 +2556,87 @@ function setupChat() {
     }
   }
 
+  // Image attachment button & file picker
+  const attachBtn = document.querySelector<HTMLButtonElement>("#btn-chat-attach-image");
+  const fileInput = document.querySelector<HTMLInputElement>("#chat-file-input");
+
+  attachBtn?.addEventListener("click", () => {
+    if (!isVisionActive()) {
+      showToast("Vision adaptor (--mmproj) is not attached. Attach a vision projector in Configuration to input images.", "warning", "Vision Adaptor Required");
+      return;
+    }
+    fileInput?.click();
+  });
+
+  fileInput?.addEventListener("change", () => {
+    if (fileInput.files) {
+      Array.from(fileInput.files).forEach(addChatImageFile);
+      fileInput.value = "";
+    }
+  });
+
+  // Clipboard paste for images
+  input.addEventListener("paste", (e) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      if (!item) continue;
+      if (item.type.indexOf("image") !== -1) {
+        if (!isVisionActive()) {
+          showToast("Vision adaptor (--mmproj) is not attached. Attach a vision projector in Configuration to input images.", "warning", "Vision Adaptor Required");
+          return;
+        }
+        const file = item.getAsFile();
+        if (file) {
+          addChatImageFile(file);
+          e.preventDefault();
+        }
+      }
+    }
+  });
+
+  // Drag and drop images into chat
+  const chatInputWrapper = document.querySelector<HTMLElement>("#chat-input-wrapper");
+  const chatLog = document.querySelector<HTMLElement>("#chat-messages");
+
+  [chatInputWrapper, chatLog].forEach((target) => {
+    if (!target) return;
+    target.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      if (isVisionActive()) {
+        chatInputWrapper?.classList.add("chat-drop-active");
+      }
+    });
+
+    target.addEventListener("dragleave", () => {
+      chatInputWrapper?.classList.remove("chat-drop-active");
+    });
+
+    target.addEventListener("drop", (e) => {
+      e.preventDefault();
+      chatInputWrapper?.classList.remove("chat-drop-active");
+      if (!isVisionActive()) {
+        showToast("Vision adaptor (--mmproj) is not attached. Attach a vision projector in Configuration to input images.", "warning", "Vision Adaptor Required");
+        return;
+      }
+      if (e.dataTransfer?.files) {
+        Array.from(e.dataTransfer.files).forEach((file) => {
+          if (file.type.startsWith("image/")) {
+            addChatImageFile(file);
+          }
+        });
+      }
+    });
+  });
+
   // Handle new message submit from bottom bar
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
     const text = input.value.trim();
-    if (!text) return;
+    const images = pendingChatImages.map((img) => img.dataUrl);
+
+    if (!text && images.length === 0) return;
 
     if (!isServerRunning) {
       showToast("Start the server on the Overview tab before testing in the playground.", "warning", "Server Stopped");
@@ -2362,7 +2645,10 @@ function setupChat() {
 
     input.value = "";
     input.style.height = "auto";
-    addMessageToSession(currentSession, "user", text);
+    pendingChatImages = [];
+    renderChatImagePreviews();
+
+    addMessageToSession(currentSession, "user", text, images);
     renderSessions();
     renderStage();
 
@@ -2373,6 +2659,7 @@ function setupChat() {
   renderPersonaOptions();
   renderSessions();
   renderStage();
+  updateVisionUI();
 }
 
 

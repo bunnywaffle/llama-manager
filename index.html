@@ -761,6 +761,10 @@
                       <i data-lucide="cpu"></i>
                       <span>Offline</span>
                     </span>
+                    <span class="chat-model-pill vision-pill" id="chat-vision-badge" style="display: none;" title="Multimodal vision projector (--mmproj) attached">
+                      <i data-lucide="eye"></i>
+                      <span>Vision Active</span>
+                    </span>
                   </div>
 
                   <div class="chat-stage-controls">
@@ -809,13 +813,24 @@
 
                 <!-- Chat Input Bar -->
                 <form class="chat-bar" id="chat-form">
-                  <div class="chat-input-wrapper">
+                  <!-- Image preview strip when images are attached -->
+                  <div class="chat-image-previews" id="chat-image-previews" style="display: none;"></div>
+
+                  <div class="chat-input-wrapper" id="chat-input-wrapper">
+                    <!-- Image attachment input & button -->
+                    <input type="file" id="chat-file-input" accept="image/png,image/jpeg,image/webp,image/gif,image/bmp" style="display: none;" multiple />
+                    <button type="button" class="chat-attach-btn" id="btn-chat-attach-image" title="Attach Image" style="display: none;">
+                      <i data-lucide="image"></i>
+                    </button>
                     <textarea class="chat-input-textarea" id="chat-input" placeholder="Send a message to your model... (Enter to send, Shift+Enter for newline)" rows="1"></textarea>
                     <button type="submit" class="chat-send-btn" id="btn-chat-send" title="Send message">
                       <i data-lucide="send"></i>
                     </button>
                   </div>
                   <div class="chat-bar-hints">
+                    <span id="chat-vision-hint" style="display: none; color: #10b981; font-weight: 500; margin-right: auto; gap: 4px; align-items: center;">
+                      <i data-lucide="sparkles" style="width: 12px; height: 12px; display: inline-block; vertical-align: -1px;"></i> Vision Active · Drag, paste (Ctrl+V) or click <i data-lucide="image" style="width: 11px; height: 11px; display: inline-block; vertical-align: -1px;"></i> to input images
+                    </span>
                     <span>Press <kbd>Enter</kbd> to send, <kbd>Shift+Enter</kbd> for newline</span>
                   </div>
                 </form>
