@@ -296,14 +296,7 @@ func (sm *ServerManager) Start(cfg ServerConfig) error {
 	// If a managed server instance is currently running, stop it cleanly first
 	if sm.running && sm.cmd != nil && sm.cmd.Process != nil {
 		pid := sm.cmd.Process.Pid
-		if runtime.GOOS == "windows" {
-			killCmd := prepareCmd(exec.Command("taskkill", "/PID", strconv.Itoa(pid), "/T", "/F"))
-			_ = killCmd.Run()
-		} else {
-			_ = sm.cmd.Process.Signal(os.Interrupt)
-			time.Sleep(100 * time.Millisecond)
-			_ = sm.cmd.Process.Kill()
-		}
+		terminateProcessTree(pid)
 		sm.running = false
 	}
 
@@ -315,6 +308,12 @@ func (sm *ServerManager) Start(cfg ServerConfig) error {
 	serverExe := filepath.Join(sm.binDir, getServerExeName())
 	if _, err := os.Stat(serverExe); err != nil {
 		return fmt.Errorf("%s not found in %s; please download the backend in Overview first", getServerExeName(), sm.binDir)
+	}
+	if runtime.GOOS != "windows" {
+		_ = os.Chmod(serverExe, 0755)
+	}
+	if runtime.GOOS == "darwin" {
+		_ = exec.Command("xattr", "-cr", sm.binDir).Run()
 	}
 
 	if !cfg.RouterMode {
@@ -387,7 +386,7 @@ func (sm *ServerManager) Start(cfg ServerConfig) error {
 		args = append(args, "-t", strconv.Itoa(cfg.Threads))
 	}
 	if cfg.FlashAttention {
-		args = append(args, "-fa", "on")
+		args = append(args, "-fa", "auto")
 	} else {
 		args = append(args, "-fa", "off")
 	}
@@ -500,20 +499,37 @@ func (sm *ServerManager) Start(cfg ServerConfig) error {
 	cmd := prepareCmd(exec.Command(serverExe, args...))
 	cmd.Dir = sm.binDir
 
-	// Prepend binDir to PATH so dynamic loaders reliably find cudart, cublas, and ggml libraries
+	// Prepend binDir to PATH, LD_LIBRARY_PATH (Linux), and DYLD_LIBRARY_PATH (macOS)
 	env := os.Environ()
-	pathUpdated := false
 	sep := string(os.PathListSeparator)
+
+	pathUpdated := false
+	ldUpdated := false
+	dyldUpdated := false
+
 	for i, e := range env {
-		if strings.HasPrefix(strings.ToUpper(e), "PATH=") {
+		upper := strings.ToUpper(e)
+		if strings.HasPrefix(upper, "PATH=") {
 			env[i] = fmt.Sprintf("PATH=%s%s%s", sm.binDir, sep, e[5:])
 			pathUpdated = true
-			break
+		} else if strings.HasPrefix(upper, "LD_LIBRARY_PATH=") {
+			env[i] = fmt.Sprintf("LD_LIBRARY_PATH=%s%s%s", sm.binDir, sep, e[16:])
+			ldUpdated = true
+		} else if strings.HasPrefix(upper, "DYLD_LIBRARY_PATH=") {
+			env[i] = fmt.Sprintf("DYLD_LIBRARY_PATH=%s%s%s", sm.binDir, sep, e[18:])
+			dyldUpdated = true
 		}
 	}
 	if !pathUpdated {
 		env = append(env, fmt.Sprintf("PATH=%s", sm.binDir))
 	}
+	if !ldUpdated {
+		env = append(env, fmt.Sprintf("LD_LIBRARY_PATH=%s", sm.binDir))
+	}
+	if !dyldUpdated {
+		env = append(env, fmt.Sprintf("DYLD_LIBRARY_PATH=%s", sm.binDir))
+	}
+	env = append(env, fmt.Sprintf("DYLD_FALLBACK_LIBRARY_PATH=%s", sm.binDir))
 	cmd.Env = env
 
 	stdoutPipe, err := cmd.StdoutPipe()
@@ -584,8 +600,15 @@ func (sm *ServerManager) Start(cfg ServerConfig) error {
 			snippet = sm.getLastErrorSnippetLocked()
 		}
 		return fmt.Errorf("llama-server failed to start (%v). %s", err, snippet)
-	case <-time.After(800 * time.Millisecond):
+	case <-time.After(1200 * time.Millisecond):
 		sm.mu.Lock()
+		if !sm.running {
+			snippet := sm.getLastMeaningfulErrorLocked()
+			if snippet == "" {
+				snippet = sm.lastError
+			}
+			return fmt.Errorf("llama-server failed during startup: %s", snippet)
+		}
 	}
 
 	return nil
@@ -601,16 +624,7 @@ func (sm *ServerManager) Stop() error {
 	}
 
 	pid := sm.cmd.Process.Pid
-	if runtime.GOOS == "windows" {
-		// On Windows, use taskkill to kill process tree cleanly without flashing console
-		killCmd := prepareCmd(exec.Command("taskkill", "/PID", strconv.Itoa(pid), "/T", "/F"))
-		_ = killCmd.Run()
-	} else {
-		// On Unix (Linux / macOS), gracefully signal then terminate
-		_ = sm.cmd.Process.Signal(os.Interrupt)
-		time.Sleep(100 * time.Millisecond)
-		_ = sm.cmd.Process.Kill()
-	}
+	terminateProcessTree(pid)
 
 	sm.running = false
 	sm.lastError = ""
@@ -671,9 +685,17 @@ func (sm *ServerManager) getLastMeaningfulErrorLocked() string {
 			strings.Contains(lower, "out of memory") ||
 			strings.Contains(lower, "cannot open") ||
 			strings.Contains(lower, "exception") ||
-			strings.Contains(lower, "invalid") {
-			if len(line) > 140 {
-				line = line[:137] + "..."
+			strings.Contains(lower, "invalid") ||
+			strings.Contains(lower, "dyld") ||
+			strings.Contains(lower, "library not loaded") ||
+			strings.Contains(lower, "shared libraries") ||
+			strings.Contains(lower, "permission denied") ||
+			strings.Contains(lower, "segmentation fault") ||
+			strings.Contains(lower, "illegal instruction") ||
+			strings.Contains(lower, "abort") ||
+			strings.Contains(lower, "killed") {
+			if len(line) > 160 {
+				line = line[:157] + "..."
 			}
 			return line
 		}
@@ -683,8 +705,8 @@ func (sm *ServerManager) getLastMeaningfulErrorLocked() string {
 	for i := len(sm.logBuffer) - 1; i >= 0; i-- {
 		line := strings.TrimSpace(sm.logBuffer[i])
 		if line != "" && !strings.HasPrefix(line, "[System]") {
-			if len(line) > 140 {
-				line = line[:137] + "..."
+			if len(line) > 160 {
+				line = line[:157] + "..."
 			}
 			return line
 		}
@@ -734,9 +756,14 @@ func (sm *ServerManager) GetRecentLogs() []string {
 
 func (sm *ServerManager) streamLogs(reader io.Reader) {
 	scanner := bufio.NewScanner(reader)
+	buf := make([]byte, 64*1024)
+	scanner.Buffer(buf, 1024*1024)
 	for scanner.Scan() {
 		line := scanner.Text()
 		sm.addLog(line)
+	}
+	if err := scanner.Err(); err != nil && err != io.EOF {
+		sm.addLog(fmt.Sprintf("[System] Log scanner notice: %v", err))
 	}
 }
 

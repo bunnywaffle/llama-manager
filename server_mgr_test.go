@@ -1,6 +1,8 @@
 package main
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"os"
 	"path/filepath"
 	"testing"
@@ -73,5 +75,106 @@ func TestModelConfigPersistence(t *testing.T) {
 	}
 	if loadedCfg.ReasoningEffort != "high" {
 		t.Errorf("Expected ReasoningEffort 'high', got %s", loadedCfg.ReasoningEffort)
+	}
+}
+
+func TestTarGzExtractionWithSymlinks(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "llama_targz_test_*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	tarGzPath := filepath.Join(tempDir, "test.tar.gz")
+	f, err := os.Create(tarGzPath)
+	if err != nil {
+		t.Fatalf("Failed to create test archive: %v", err)
+	}
+
+	gzWriter := gzip.NewWriter(f)
+	tarWriter := tar.NewWriter(gzWriter)
+
+	data := []byte("dylib-binary-content-12345")
+
+	// 1. First write symlink libllama.dylib -> libllama.0.dylib
+	_ = tarWriter.WriteHeader(&tar.Header{
+		Name:     "llama-b999/libllama.dylib",
+		Mode:     0755,
+		Typeflag: tar.TypeSymlink,
+		Linkname: "libllama.0.dylib",
+	})
+
+	// 2. Write symlink libllama.0.dylib -> libllama.0.7.0.dylib
+	_ = tarWriter.WriteHeader(&tar.Header{
+		Name:     "llama-b999/libllama.0.dylib",
+		Mode:     0755,
+		Typeflag: tar.TypeSymlink,
+		Linkname: "libllama.0.7.0.dylib",
+	})
+
+	// 3. Write regular file libllama.0.7.0.dylib
+	_ = tarWriter.WriteHeader(&tar.Header{
+		Name:     "llama-b999/libllama.0.7.0.dylib",
+		Mode:     0755,
+		Size:     int64(len(data)),
+		Typeflag: tar.TypeReg,
+	})
+	_, _ = tarWriter.Write(data)
+
+	// 4. Write llama-server executable
+	serverData := []byte("fake-server-bin")
+	_ = tarWriter.WriteHeader(&tar.Header{
+		Name:     "llama-b999/llama-server",
+		Mode:     0755,
+		Size:     int64(len(serverData)),
+		Typeflag: tar.TypeReg,
+	})
+	_, _ = tarWriter.Write(serverData)
+
+	_ = tarWriter.Close()
+	_ = gzWriter.Close()
+	_ = f.Close()
+
+	// Extract
+	dstDir := filepath.Join(tempDir, "extracted")
+	_ = os.MkdirAll(dstDir, 0755)
+
+	rm := NewReleaseManager(dstDir, tempDir)
+	err = rm.extractTarGz(tarGzPath, dstDir, func(p ProgressReport) {})
+	if err != nil {
+		t.Fatalf("extractTarGz failed: %v", err)
+	}
+
+	// Verify libllama.0.7.0.dylib exists and non-empty
+	pReal := filepath.Join(dstDir, "libllama.0.7.0.dylib")
+	infoReal, err := os.Stat(pReal)
+	if err != nil || infoReal.Size() != int64(len(data)) {
+		t.Fatalf("Expected real dylib with size %d, got err=%v", len(data), err)
+	}
+
+	// Verify libllama.0.dylib exists and non-empty (resolved or copied)
+	p0 := filepath.Join(dstDir, "libllama.0.dylib")
+	info0, err := os.Stat(p0)
+	if err != nil {
+		t.Fatalf("Failed to stat libllama.0.dylib: %v", err)
+	}
+	if info0.Size() == 0 {
+		t.Fatalf("libllama.0.dylib was extracted as an empty 0-byte file!")
+	}
+
+	// Verify libllama.dylib exists and non-empty (resolved or copied)
+	pMain := filepath.Join(dstDir, "libllama.dylib")
+	infoMain, err := os.Stat(pMain)
+	if err != nil {
+		t.Fatalf("Failed to stat libllama.dylib: %v", err)
+	}
+	if infoMain.Size() == 0 {
+		t.Fatalf("libllama.dylib was extracted as an empty 0-byte file!")
+	}
+
+	// Verify llama-server exists
+	pServer := filepath.Join(dstDir, "llama-server")
+	if _, err := os.Stat(pServer); err != nil {
+		t.Fatalf("Failed to find extracted llama-server: %v", err)
 	}
 }

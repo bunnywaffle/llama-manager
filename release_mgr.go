@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -414,7 +415,25 @@ func (rm *ReleaseManager) ActivateBackend(variant string) error {
 	_ = os.RemoveAll(rm.binDir)
 	_ = os.MkdirAll(rm.binDir, 0755)
 
-	return copyDir(targetDir, rm.binDir)
+	if err := copyDir(targetDir, rm.binDir); err != nil {
+		return err
+	}
+
+	activeExe := filepath.Join(rm.binDir, getServerExeName())
+	if runtime.GOOS != "windows" {
+		_ = os.Chmod(activeExe, 0755)
+		entries, _ := os.ReadDir(rm.binDir)
+		for _, e := range entries {
+			if !e.IsDir() {
+				_ = os.Chmod(filepath.Join(rm.binDir, e.Name()), 0755)
+			}
+		}
+	}
+	if runtime.GOOS == "darwin" {
+		_ = exec.Command("xattr", "-cr", rm.binDir).Run()
+	}
+
+	return nil
 }
 
 func (rm *ReleaseManager) CheckReleases() ([]ReleaseInfo, error) {
@@ -553,7 +572,7 @@ func (rm *ReleaseManager) DownloadAndInstall(tag, variant string, onProgress fun
 	// Step 2: For CUDA, match the CUDA runtime archive with the same toolkit
 	// version as the primary asset (e.g. primary cuda-12.8 pairs with
 	// cudart cuda-12.8), regardless of host OS archive layout.
-	if variant == "cuda" {
+	if variant == "cuda" && primaryAsset != nil {
 		targetVer := cudaVersionOf(strings.ToLower(primaryAsset.Name))
 
 		for i := range targetRelease.Assets {
@@ -603,20 +622,40 @@ func (rm *ReleaseManager) DownloadAndInstall(tag, variant string, onProgress fun
 		return err
 	}
 
-	// Ensure llama-server executable is directly at the root of targetDir
+	// Ensure llama-server executable and all companion libraries are directly at the root of targetDir
 	serverExeName := getServerExeName()
 	serverExe := filepath.Join(targetDir, serverExeName)
 	if _, err := os.Stat(serverExe); err != nil {
+		var subDirWithExe string
 		_ = filepath.Walk(targetDir, func(path string, info os.FileInfo, err error) error {
 			if err == nil && !info.IsDir() && info.Name() == serverExeName {
-				_ = os.Rename(path, serverExe)
+				subDirWithExe = filepath.Dir(path)
+				return io.EOF
 			}
 			return nil
 		})
+		if subDirWithExe != "" && subDirWithExe != targetDir {
+			entries, _ := os.ReadDir(subDirWithExe)
+			for _, e := range entries {
+				oldPath := filepath.Join(subDirWithExe, e.Name())
+				newPath := filepath.Join(targetDir, e.Name())
+				_ = os.Rename(oldPath, newPath)
+			}
+			_ = os.Remove(subDirWithExe)
+		}
 	}
 
 	if runtime.GOOS != "windows" {
 		_ = os.Chmod(serverExe, 0755)
+		entries, _ := os.ReadDir(targetDir)
+		for _, e := range entries {
+			if !e.IsDir() {
+				_ = os.Chmod(filepath.Join(targetDir, e.Name()), 0755)
+			}
+		}
+	}
+	if runtime.GOOS == "darwin" {
+		_ = exec.Command("xattr", "-cr", targetDir).Run()
 	}
 
 	// Write version tag and variant in targetDir
@@ -627,6 +666,20 @@ func (rm *ReleaseManager) DownloadAndInstall(tag, variant string, onProgress fun
 	_ = os.RemoveAll(rm.binDir)
 	_ = os.MkdirAll(rm.binDir, 0755)
 	_ = copyDir(targetDir, rm.binDir)
+
+	binExe := filepath.Join(rm.binDir, serverExeName)
+	if runtime.GOOS != "windows" {
+		_ = os.Chmod(binExe, 0755)
+		entries, _ := os.ReadDir(rm.binDir)
+		for _, e := range entries {
+			if !e.IsDir() {
+				_ = os.Chmod(filepath.Join(rm.binDir, e.Name()), 0755)
+			}
+		}
+	}
+	if runtime.GOOS == "darwin" {
+		_ = exec.Command("xattr", "-cr", rm.binDir).Run()
+	}
 
 	onProgress(ProgressReport{
 		Task:     "download_llama",
@@ -729,6 +782,73 @@ func (rm *ReleaseManager) extractArchive(srcArchive, dstDir string, onProgress f
 	return fmt.Errorf("unsupported archive format: %s", filepath.Base(srcArchive))
 }
 
+type deferredLink struct {
+	targetPath string
+	linkTarget string
+	isSymlink  bool
+}
+
+func resolveFinalTarget(baseDir string, linkMap map[string]string, targetName string) string {
+	currName := filepath.Base(targetName)
+	visited := make(map[string]bool)
+	for depth := 0; depth < 16; depth++ {
+		if visited[currName] {
+			break
+		}
+		visited[currName] = true
+		if next, ok := linkMap[currName]; ok {
+			currName = filepath.Base(next)
+		} else {
+			break
+		}
+	}
+
+	currPath := filepath.Join(baseDir, currName)
+	if filepath.IsAbs(targetName) && currName == filepath.Base(targetName) {
+		if _, err := os.Lstat(targetName); err == nil {
+			currPath = targetName
+		}
+	}
+
+	for depth := 0; depth < 16; depth++ {
+		fi, err := os.Lstat(currPath)
+		if err != nil {
+			break
+		}
+		if fi.Mode()&os.ModeSymlink != 0 {
+			link, err := os.Readlink(currPath)
+			if err != nil {
+				break
+			}
+			if filepath.IsAbs(link) {
+				currPath = link
+			} else {
+				currPath = filepath.Join(filepath.Dir(currPath), link)
+			}
+			continue
+		}
+		break
+	}
+	return currPath
+}
+
+func copyFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0755)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+
+	_, err = io.Copy(out, in)
+	return err
+}
+
 func (rm *ReleaseManager) extractZip(srcZip, dstDir string, onProgress func(ProgressReport)) error {
 	r, err := zip.OpenReader(srcZip)
 	if err != nil {
@@ -743,12 +863,19 @@ func (rm *ReleaseManager) extractZip(srcZip, dstDir string, onProgress func(Prog
 		Percent:  98,
 	})
 
+	var deferredLinks []deferredLink
+	linkMap := make(map[string]string)
+
 	for _, f := range r.File {
 		cleanName := filepath.Clean(f.Name)
 		if strings.HasPrefix(cleanName, "..") {
 			continue
 		}
-		targetPath := filepath.Join(dstDir, filepath.Base(cleanName))
+		baseName := filepath.Base(cleanName)
+		if baseName == "." || baseName == "/" || baseName == "\\" {
+			continue
+		}
+		targetPath := filepath.Join(dstDir, baseName)
 
 		if f.FileInfo().IsDir() {
 			continue
@@ -757,6 +884,22 @@ func (rm *ReleaseManager) extractZip(srcZip, dstDir string, onProgress func(Prog
 		rc, err := f.Open()
 		if err != nil {
 			return err
+		}
+
+		// Handle symlink entry in zip
+		if f.Mode()&os.ModeSymlink != 0 {
+			targetBytes, err := io.ReadAll(rc)
+			rc.Close()
+			if err == nil {
+				targetName := filepath.Base(strings.TrimSpace(string(targetBytes)))
+				deferredLinks = append(deferredLinks, deferredLink{
+					targetPath: targetPath,
+					linkTarget: targetName,
+					isSymlink:  true,
+				})
+				linkMap[baseName] = targetName
+			}
+			continue
 		}
 
 		outFile, err := os.OpenFile(targetPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, f.Mode())
@@ -771,6 +914,47 @@ func (rm *ReleaseManager) extractZip(srcZip, dstDir string, onProgress func(Prog
 		if err != nil {
 			return err
 		}
+
+		if runtime.GOOS != "windows" {
+			perm := f.Mode().Perm()
+			if strings.HasPrefix(baseName, "llama-") || strings.HasPrefix(baseName, "ggml-") || strings.Contains(baseName, ".so") || strings.Contains(baseName, ".dylib") {
+				perm |= 0755
+			}
+			_ = os.Chmod(targetPath, perm)
+		}
+	}
+
+	if runtime.GOOS != "windows" {
+		for _, l := range deferredLinks {
+			if l.isSymlink {
+				_ = os.Remove(l.targetPath)
+				_ = os.Symlink(l.linkTarget, l.targetPath)
+			}
+		}
+	}
+
+	for _, l := range deferredLinks {
+		needFallback := true
+		if runtime.GOOS != "windows" && l.isSymlink {
+			if _, err := os.Stat(l.targetPath); err == nil {
+				needFallback = false
+			} else {
+				_ = os.Remove(l.targetPath)
+			}
+		}
+		if needFallback {
+			resolved := resolveFinalTarget(dstDir, linkMap, l.linkTarget)
+			if _, err := os.Stat(resolved); err == nil {
+				_ = copyFile(resolved, l.targetPath)
+				if runtime.GOOS != "windows" {
+					_ = os.Chmod(l.targetPath, 0755)
+				}
+			}
+		}
+	}
+
+	if runtime.GOOS == "darwin" {
+		_ = exec.Command("xattr", "-cr", dstDir).Run()
 	}
 
 	return nil
@@ -798,6 +982,9 @@ func (rm *ReleaseManager) extractTarGz(srcTarGz, dstDir string, onProgress func(
 		Percent:  98,
 	})
 
+	var deferredLinks []deferredLink
+	linkMap := make(map[string]string)
+
 	for {
 		header, err := tarReader.Next()
 		if err == io.EOF {
@@ -811,12 +998,29 @@ func (rm *ReleaseManager) extractTarGz(srcTarGz, dstDir string, onProgress func(
 		if strings.HasPrefix(cleanName, "..") {
 			continue
 		}
-		targetPath := filepath.Join(dstDir, filepath.Base(cleanName))
+		baseName := filepath.Base(cleanName)
+		if baseName == "." || baseName == "/" || baseName == "\\" {
+			continue
+		}
+		targetPath := filepath.Join(dstDir, baseName)
 
 		if header.Typeflag == tar.TypeDir {
 			continue
 		}
 
+		// Handle Symlinks and Hardlinks
+		if header.Typeflag == tar.TypeSymlink || header.Typeflag == tar.TypeLink {
+			targetName := filepath.Base(header.Linkname)
+			deferredLinks = append(deferredLinks, deferredLink{
+				targetPath: targetPath,
+				linkTarget: targetName,
+				isSymlink:  (header.Typeflag == tar.TypeSymlink),
+			})
+			linkMap[baseName] = targetName
+			continue
+		}
+
+		// Regular file
 		outFile, err := os.OpenFile(targetPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, os.FileMode(header.Mode))
 		if err != nil {
 			return err
@@ -827,6 +1031,47 @@ func (rm *ReleaseManager) extractTarGz(srcTarGz, dstDir string, onProgress func(
 			return err
 		}
 		outFile.Close()
+
+		if runtime.GOOS != "windows" {
+			perm := os.FileMode(header.Mode).Perm()
+			if strings.HasPrefix(baseName, "llama-") || strings.HasPrefix(baseName, "ggml-") || strings.Contains(baseName, ".so") || strings.Contains(baseName, ".dylib") {
+				perm |= 0755
+			}
+			_ = os.Chmod(targetPath, perm)
+		}
+	}
+
+	if runtime.GOOS != "windows" {
+		for _, l := range deferredLinks {
+			if l.isSymlink {
+				_ = os.Remove(l.targetPath)
+				_ = os.Symlink(l.linkTarget, l.targetPath)
+			}
+		}
+	}
+
+	for _, l := range deferredLinks {
+		needFallback := true
+		if runtime.GOOS != "windows" && l.isSymlink {
+			if _, err := os.Stat(l.targetPath); err == nil {
+				needFallback = false
+			} else {
+				_ = os.Remove(l.targetPath)
+			}
+		}
+		if needFallback {
+			resolved := resolveFinalTarget(dstDir, linkMap, l.linkTarget)
+			if _, err := os.Stat(resolved); err == nil {
+				_ = copyFile(resolved, l.targetPath)
+				if runtime.GOOS != "windows" {
+					_ = os.Chmod(l.targetPath, 0755)
+				}
+			}
+		}
+	}
+
+	if runtime.GOOS == "darwin" {
+		_ = exec.Command("xattr", "-cr", dstDir).Run()
 	}
 
 	return nil
@@ -838,31 +1083,80 @@ func copyDir(src, dst string) error {
 	if err != nil {
 		return err
 	}
+
+	type symlinkEntry struct {
+		dstPath string
+		target  string
+	}
+	var symlinks []symlinkEntry
+	linkMap := make(map[string]string)
+
 	for _, entry := range entries {
 		srcPath := filepath.Join(src, entry.Name())
 		dstPath := filepath.Join(dst, entry.Name())
+
+		lstat, err := os.Lstat(srcPath)
+		if err != nil {
+			continue
+		}
+
+		if lstat.Mode()&os.ModeSymlink != 0 {
+			target, err := os.Readlink(srcPath)
+			if err == nil {
+				symlinks = append(symlinks, symlinkEntry{
+					dstPath: dstPath,
+					target:  target,
+				})
+				linkMap[entry.Name()] = filepath.Base(target)
+			}
+			continue
+		}
+
 		if entry.IsDir() {
 			if err := copyDir(srcPath, dstPath); err != nil {
 				return err
 			}
 		} else {
-			in, err := os.Open(srcPath)
-			if err != nil {
+			if err := copyFile(srcPath, dstPath); err != nil {
 				return err
 			}
-			out, err := os.OpenFile(dstPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0755)
-			if err != nil {
-				in.Close()
-				return err
-			}
-			_, err = io.Copy(out, in)
-			in.Close()
-			out.Close()
-			if err != nil {
-				return err
+			if runtime.GOOS != "windows" {
+				_ = os.Chmod(dstPath, lstat.Mode().Perm()|0755)
 			}
 		}
 	}
+
+	if runtime.GOOS != "windows" {
+		for _, sl := range symlinks {
+			_ = os.Remove(sl.dstPath)
+			_ = os.Symlink(sl.target, sl.dstPath)
+		}
+	}
+
+	for _, sl := range symlinks {
+		needFallback := true
+		if runtime.GOOS != "windows" {
+			if _, err := os.Stat(sl.dstPath); err == nil {
+				needFallback = false
+			} else {
+				_ = os.Remove(sl.dstPath)
+			}
+		}
+		if needFallback {
+			resolved := resolveFinalTarget(src, linkMap, sl.target)
+			if _, err := os.Stat(resolved); err == nil {
+				_ = copyFile(resolved, sl.dstPath)
+				if runtime.GOOS != "windows" {
+					_ = os.Chmod(sl.dstPath, 0755)
+				}
+			}
+		}
+	}
+
+	if runtime.GOOS == "darwin" {
+		_ = exec.Command("xattr", "-cr", dst).Run()
+	}
+
 	return nil
 }
 

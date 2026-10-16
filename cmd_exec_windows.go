@@ -4,6 +4,7 @@ package main
 
 import (
 	"os/exec"
+	"strconv"
 	"syscall"
 )
 
@@ -19,4 +20,13 @@ func prepareCmd(cmd *exec.Cmd) *exec.Cmd {
 	cmd.SysProcAttr.HideWindow = true
 	cmd.SysProcAttr.CreationFlags |= 0x08000000 // CREATE_NO_WINDOW
 	return cmd
+}
+
+// terminateProcessTree terminates a process and all its child processes cleanly on Windows.
+func terminateProcessTree(pid int) {
+	if pid <= 0 {
+		return
+	}
+	killCmd := prepareCmd(exec.Command("taskkill", "/PID", strconv.Itoa(pid), "/T", "/F"))
+	_ = killCmd.Run()
 }

@@ -260,6 +260,9 @@ func (mm *ModelManager) ImportModel(sourcePath string) (ModelInfo, error) {
 	mm.mu.Unlock()
 
 	cleanSource := filepath.Clean(sourcePath)
+	if abs, err := filepath.Abs(cleanSource); err == nil {
+		cleanSource = abs
+	}
 	destName := filepath.Base(sourcePath)
 	destPath := filepath.Join(dir, destName)
 	cleanDest := filepath.Clean(destPath)

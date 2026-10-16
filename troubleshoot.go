@@ -245,11 +245,47 @@ func RunDiagnostics(binDir, modelsDir, variant string, port int, hw HardwareInfo
 
 	// 3. Execution Smoke Test (runs the server binary with --help and a 3s timeout)
 	if _, err := os.Stat(exePath); err == nil {
+		if runtime.GOOS != "windows" {
+			_ = os.Chmod(exePath, 0755)
+		}
+		if runtime.GOOS == "darwin" {
+			_ = exec.Command("xattr", "-cr", binDir).Run()
+		}
+
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 
 		cmd := prepareCmd(exec.CommandContext(ctx, exePath, "--help"))
 		cmd.Dir = binDir
+
+		env := os.Environ()
+		sep := string(os.PathListSeparator)
+		pathUpdated, ldUpdated, dyldUpdated := false, false, false
+		for i, e := range env {
+			upper := strings.ToUpper(e)
+			if strings.HasPrefix(upper, "PATH=") {
+				env[i] = fmt.Sprintf("PATH=%s%s%s", binDir, sep, e[5:])
+				pathUpdated = true
+			} else if strings.HasPrefix(upper, "LD_LIBRARY_PATH=") {
+				env[i] = fmt.Sprintf("LD_LIBRARY_PATH=%s%s%s", binDir, sep, e[16:])
+				ldUpdated = true
+			} else if strings.HasPrefix(upper, "DYLD_LIBRARY_PATH=") {
+				env[i] = fmt.Sprintf("DYLD_LIBRARY_PATH=%s%s%s", binDir, sep, e[18:])
+				dyldUpdated = true
+			}
+		}
+		if !pathUpdated {
+			env = append(env, fmt.Sprintf("PATH=%s", binDir))
+		}
+		if !ldUpdated {
+			env = append(env, fmt.Sprintf("LD_LIBRARY_PATH=%s", binDir))
+		}
+		if !dyldUpdated {
+			env = append(env, fmt.Sprintf("DYLD_LIBRARY_PATH=%s", binDir))
+		}
+		env = append(env, fmt.Sprintf("DYLD_FALLBACK_LIBRARY_PATH=%s", binDir))
+		cmd.Env = env
+
 		out, err := cmd.CombinedOutput()
 		if ctx.Err() == context.DeadlineExceeded {
 			report.Items = append(report.Items, DiagnosticItem{
@@ -392,8 +428,10 @@ func KillZombieProcesses() error {
 		cmd := prepareCmd(exec.Command("taskkill", "/F", "/IM", "llama-server.exe", "/T"))
 		_ = cmd.Run()
 	} else {
-		cmd := prepareCmd(exec.Command("pkill", "-f", "llama-server"))
+		cmd := prepareCmd(exec.Command("pkill", "-x", "llama-server"))
 		_ = cmd.Run()
+		cmd2 := prepareCmd(exec.Command("killall", "-9", "llama-server"))
+		_ = cmd2.Run()
 	}
 	return nil
 }
