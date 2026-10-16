@@ -24,9 +24,24 @@ func getServerExeName() string {
 	return "llama-server"
 }
 
+// defaultBackendForHost returns a safe default backend variant for the current
+// OS without assuming any GPU vendor: Metal on macOS, CPU elsewhere.
+// Callers should prefer the detected HardwareInfo.RecommendedBackend and only
+// fall back to this when detection yields nothing.
+func defaultBackendForHost() string {
+	if runtime.GOOS == "darwin" {
+		return "metal"
+	}
+	return "cpu"
+}
+
 // isAssetCompatibleWithHost ensures only releases built for the detected OS and architecture are downloaded.
 func isAssetCompatibleWithHost(assetName string) bool {
 	name := strings.ToLower(assetName)
+	// Never treat framework/installer artifacts as server backends.
+	if strings.Contains(name, "xcframework") || strings.HasSuffix(name, ".dmg") {
+		return false
+	}
 	switch runtime.GOOS {
 	case "windows":
 		if !strings.Contains(name, "win") {
@@ -44,6 +59,9 @@ func isAssetCompatibleWithHost(assetName string) bool {
 		if !strings.Contains(name, "ubuntu") && !strings.Contains(name, "linux") {
 			return false
 		}
+		if strings.Contains(name, "s390x") {
+			return false
+		}
 		if runtime.GOARCH == "arm64" {
 			return strings.Contains(name, "arm64")
 		}
@@ -58,6 +76,115 @@ func isAssetCompatibleWithHost(assetName string) bool {
 		return strings.Contains(name, "x64")
 	default:
 		return strings.Contains(name, runtime.GOOS)
+	}
+}
+
+// isSpecializedBuild reports whether a host-compatible asset is a specialized
+// accelerator build (OpenVINO, SYCL, OpenCL/Adreno, Snapdragon, s390x) rather
+// than one of the generic variants this app manages (cuda, rocm, vulkan,
+// cpu, metal). Such builds must never be selected as a generic "cpu" backend.
+func isSpecializedBuild(lower string) bool {
+	special := []string{"openvino", "sycl", "opencl", "adreno", "snapdragon", "s390x", "xcframework"}
+	for _, s := range special {
+		if strings.Contains(lower, s) {
+			return true
+		}
+	}
+	return false
+}
+
+// cudaVersionOf extracts a "major.minor" CUDA version from an asset name,
+// handling both "cuda-12.8" and "cu12"/"cu13" styles. Returns "" if none found.
+func cudaVersionOf(lower string) string {
+	if idx := strings.Index(lower, "cuda-"); idx != -1 {
+		rest := lower[idx+len("cuda-"):]
+		dots := 0
+		end := 0
+		for end < len(rest) && ((rest[end] >= '0' && rest[end] <= '9') || rest[end] == '.') {
+			if rest[end] == '.' {
+				dots++
+				if dots > 1 {
+					break
+				}
+			}
+			end++
+		}
+		if end > 0 {
+			return strings.Trim(rest[:end], ".")
+		}
+	}
+	// Fallback: cu12 / cu13 / cu11 style markers (no minor version).
+	for _, v := range []string{"cu13", "cu12", "cu11"} {
+		if strings.Contains(lower, v) {
+			return v
+		}
+	}
+	return ""
+}
+
+// scorePrimaryAsset ranks a host-compatible "llama-*" asset for the requested
+// variant. Higher is better; negative means "not a match". The scoring prefers
+// generic builds and exact CPU markers over incidental substring matches so
+// that e.g. an OpenVINO Windows build is never chosen as the "cpu" backend.
+func scorePrimaryAsset(lower, variant string) int {
+	if !strings.HasPrefix(lower, "llama-") {
+		return -1
+	}
+	switch variant {
+	case "metal":
+		if !strings.Contains(lower, "macos") {
+			return -1
+		}
+		return 10
+	case "cuda":
+		if !(strings.Contains(lower, "cuda") || strings.Contains(lower, "cu12") || strings.Contains(lower, "cu13") || strings.Contains(lower, "cu11")) {
+			return -1
+		}
+		if isSpecializedBuild(lower) {
+			return -1
+		}
+		score := 10
+		// Prefer newer CUDA toolkits when several are published.
+		for _, v := range []string{"13.4", "12.8", "12.4", "12.2", "11.8"} {
+			if strings.Contains(lower, v) {
+				score += 5
+				break
+			}
+		}
+		return score
+	case "rocm":
+		if !strings.Contains(lower, "rocm") {
+			return -1
+		}
+		return 10
+	case "vulkan":
+		if !strings.Contains(lower, "vulkan") {
+			return -1
+		}
+		if isSpecializedBuild(lower) {
+			return -1
+		}
+		return 10
+	case "cpu":
+		if isSpecializedBuild(lower) {
+			return -1
+		}
+		if strings.Contains(lower, "cuda") || strings.Contains(lower, "vulkan") ||
+			strings.Contains(lower, "rocm") || strings.Contains(lower, "sycl") ||
+			strings.Contains(lower, "cudart") {
+			return -1
+		}
+		// Explicit CPU builds win over generic fallback builds.
+		if strings.Contains(lower, "cpu") || strings.Contains(lower, "avx") {
+			return 20
+		}
+		// Generic per-OS builds: ubuntu-x64 tarball, macOS archive.
+		if strings.Contains(lower, "macos") {
+			return 10
+		}
+		return 5
+	default:
+		return -1
 	}
 }
 
@@ -352,7 +479,10 @@ func (rm *ReleaseManager) CheckReleases() ([]ReleaseInfo, error) {
 	return releases, nil
 }
 
-// DownloadAndInstall downloads the requested release tag and variant (cuda, vulkan, cpu).
+// DownloadAndInstall downloads the requested release tag and variant.
+// Supported variants depend on the host OS: darwin offers "metal" and "cpu";
+// linux offers "cuda", "rocm", "vulkan" and "cpu"; windows offers "cuda",
+// "vulkan" and "cpu". An empty variant resolves to the OS default.
 func (rm *ReleaseManager) DownloadAndInstall(tag, variant string, onProgress func(ProgressReport)) error {
 	rm.mu.Lock()
 	if rm.isBusy {
@@ -391,56 +521,28 @@ func (rm *ReleaseManager) DownloadAndInstall(tag, variant string, onProgress fun
 		return fmt.Errorf("release tag %s not found", tag)
 	}
 
-	// Match primary asset and optional cudart asset
+	if strings.TrimSpace(variant) == "" {
+		variant = defaultBackendForHost()
+	}
+
+	// Match primary asset and optional CUDA runtime asset.
+	// Scoring (see scorePrimaryAsset) picks the best host-compatible archive
+	// for the variant and never mistakes specialized builds (OpenVINO, SYCL,
+	// OpenCL, Snapdragon) for a generic backend.
 	var primaryAsset *ReleaseAsset
 	var cudartAsset *ReleaseAsset
 
-	// Step 1: Find primary binary archive for variant
+	// Step 1: Find best primary binary archive for variant
+	bestScore := -1
 	for i := range targetRelease.Assets {
 		a := &targetRelease.Assets[i]
 		if !isAssetCompatibleWithHost(a.Name) {
 			continue
 		}
 		lower := strings.ToLower(a.Name)
-		if !strings.HasPrefix(lower, "llama-") {
-			continue
-		}
-
-		switch variant {
-		case "metal":
-			if strings.Contains(lower, "macos") {
-				primaryAsset = a
-			}
-		case "cuda":
-			if strings.Contains(lower, "cuda") || strings.Contains(lower, "cu12") || strings.Contains(lower, "cu13") || strings.Contains(lower, "cu11") {
-				if primaryAsset == nil || strings.Contains(lower, "13.4") || strings.Contains(lower, "12.4") {
-					primaryAsset = a
-				}
-			}
-		case "rocm":
-			if strings.Contains(lower, "rocm") {
-				primaryAsset = a
-			}
-		case "vulkan":
-			if strings.Contains(lower, "vulkan") {
-				primaryAsset = a
-			}
-		case "cpu":
-			if strings.Contains(lower, "cpu") || strings.Contains(lower, "avx2") ||
-				(!strings.Contains(lower, "cuda") && !strings.Contains(lower, "vulkan") && !strings.Contains(lower, "rocm") && !strings.Contains(lower, "sycl")) {
-				primaryAsset = a
-			}
-		}
-	}
-
-	if primaryAsset == nil {
-		// Fallback to any host-compatible zip/tar.gz
-		for i := range targetRelease.Assets {
-			a := &targetRelease.Assets[i]
-			if isAssetCompatibleWithHost(a.Name) && strings.HasPrefix(strings.ToLower(a.Name), "llama-") {
-				primaryAsset = a
-				break
-			}
+		if s := scorePrimaryAsset(lower, variant); s > bestScore {
+			bestScore = s
+			primaryAsset = a
 		}
 	}
 
@@ -448,19 +550,11 @@ func (rm *ReleaseManager) DownloadAndInstall(tag, variant string, onProgress fun
 		return fmt.Errorf("no matching binary found for %s on %s/%s in release %s", variant, runtime.GOOS, runtime.GOARCH, tag)
 	}
 
-	// Step 2: For CUDA, match cudart archive with EXACT version harmony
-	if variant == "cuda" && primaryAsset != nil {
-		targetVer := ""
-		pLower := strings.ToLower(primaryAsset.Name)
-		if strings.Contains(pLower, "13.4") {
-			targetVer = "13.4"
-		} else if strings.Contains(pLower, "12.4") {
-			targetVer = "12.4"
-		} else if strings.Contains(pLower, "12.2") {
-			targetVer = "12.2"
-		} else if strings.Contains(pLower, "11.8") {
-			targetVer = "11.8"
-		}
+	// Step 2: For CUDA, match the CUDA runtime archive with the same toolkit
+	// version as the primary asset (e.g. primary cuda-12.8 pairs with
+	// cudart cuda-12.8), regardless of host OS archive layout.
+	if variant == "cuda" {
+		targetVer := cudaVersionOf(strings.ToLower(primaryAsset.Name))
 
 		for i := range targetRelease.Assets {
 			a := &targetRelease.Assets[i]
@@ -489,7 +583,7 @@ func (rm *ReleaseManager) DownloadAndInstall(tag, variant string, onProgress fun
 	_ = os.MkdirAll(tempDir, 0755)
 	defer os.RemoveAll(tempDir)
 
-	// Step 3: Download & Extract CUDA runtime DLLs if applicable
+	// Step 3: Download & extract CUDA runtime libraries if applicable
 	if variant == "cuda" && cudartAsset != nil {
 		cudartArchive := filepath.Join(tempDir, cudartAsset.Name)
 		if err := rm.downloadFile(cudartAsset.DownloadURL, cudartArchive, cudartAsset.Name, cudartAsset.Size, onProgress); err != nil {
@@ -500,7 +594,7 @@ func (rm *ReleaseManager) DownloadAndInstall(tag, variant string, onProgress fun
 		}
 	}
 
-	// Step 4: Download & Extract Primary Llama Binaries
+	// Step 4: Download & extract primary llama binaries
 	primaryArchive := filepath.Join(tempDir, primaryAsset.Name)
 	if err := rm.downloadFile(primaryAsset.DownloadURL, primaryArchive, primaryAsset.Name, primaryAsset.Size, onProgress); err != nil {
 		return err

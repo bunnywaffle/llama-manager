@@ -229,7 +229,7 @@ export const LlamaService = {
   deleteModel(filename: string): Promise<void> {
     return call("LlamaService.DeleteModel", filename);
   },
-  /** DownloadBackend downloads and installs the selected release tag and variant (cuda, vulkan, cpu). */
+  /** DownloadBackend downloads and installs the selected release tag and variant. */
   downloadBackend(tag: string, variant: string): Promise<void> {
     return call("LlamaService.DownloadBackend", tag, variant);
   },
@@ -245,7 +245,7 @@ export const LlamaService = {
   getHardware(): Promise<HardwareInfo> {
     return call("LlamaService.GetHardware");
   },
-  /** GetInstalledBackend checks if llama-server.exe is installed and which version/variant. */
+  /** GetInstalledBackend checks if the server executable is installed and which version/variant. */
   getInstalledBackend(): Promise<BackendStatus> {
     return call("LlamaService.GetInstalledBackend");
   },
@@ -281,7 +281,7 @@ export const LlamaService = {
   importModelDialog(): Promise<ModelInfo | null> {
     return call("LlamaService.ImportModelDialog");
   },
-  /** KillZombieServers terminates any orphaned llama-server.exe processes. */
+  /** KillZombieServers terminates any orphaned server processes. */
   killZombieServers(): Promise<void> {
     return call("LlamaService.KillZombieServers");
   },
@@ -293,7 +293,11 @@ export const LlamaService = {
   openFolderInExplorer(dir: string): Promise<void> {
     return call("LlamaService.OpenFolderInExplorer", dir);
   },
-  /** RepairBackend executes an automated repair action for reported issues. */
+  /**
+   * RepairBackend executes an automated repair action for reported issues,
+   * resolving the target backend for the current OS (CUDA requested on macOS
+   * repairs Metal instead, etc.).
+   */
   repairBackend(action: string): Promise<void> {
     return call("LlamaService.RepairBackend", action);
   },
@@ -348,15 +352,18 @@ export const LlamaService = {
   setWindow(win: Window | null): Promise<void> {
     return call("LlamaService.SetWindow", win);
   },
-  /** StartServer launches llama-server.exe with the specified configuration. */
+  /** StartServer launches the server executable with the specified configuration. */
   startServer(cfg: ServerConfig): Promise<void> {
     return call("LlamaService.StartServer", cfg);
   },
-  /** StopServer stops the running llama-server.exe process. */
+  /** StopServer stops the running server process. */
   stopServer(): Promise<void> {
     return call("LlamaService.StopServer");
   },
-  /** SwitchBackend downloads or switches the active backend variant (cuda, vulkan, cpu). */
+  /**
+   * SwitchBackend downloads or switches the active backend variant
+   * (cuda, vulkan, cpu, metal, rocm depending on OS).
+   */
   switchBackend(variant: string): Promise<void> {
     return call("LlamaService.SwitchBackend", variant);
   },

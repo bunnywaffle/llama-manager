@@ -47,8 +47,8 @@ func NewLlamaService(appDataDir string) *LlamaService {
 
 	hw := detectHardware()
 	initialBackend := hw.RecommendedBackend
-	if initialBackend == "" {
-		initialBackend = "cuda"
+	if strings.TrimSpace(initialBackend) == "" {
+		initialBackend = defaultBackendForHost()
 	}
 
 	settings := AppSettings{
@@ -252,7 +252,8 @@ func (s *LlamaService) OpenFolderInExplorer(dir string) error {
 	}
 }
 
-// SwitchBackend downloads or switches the active backend variant (cuda, vulkan, cpu).
+// SwitchBackend downloads or switches the active backend variant
+// (cuda, vulkan, cpu, metal, rocm depending on OS).
 func (s *LlamaService) SwitchBackend(variant string) error {
 	current := s.releaseMgr.GetInstalledBackend()
 	tag := current.Version
@@ -279,7 +280,36 @@ func (s *LlamaService) SwitchBackend(variant string) error {
 	return err
 }
 
-// GetInstalledBackend checks if llama-server.exe is installed and which version/variant.
+// repairVariantForHost resolves the backend variant a repair action should
+// (re)install: the configured backend when usable on this OS, otherwise the
+// OS default. Notably, CUDA/Metal are not available everywhere.
+func (s *LlamaService) repairVariantForHost(configured string) string {
+	v := strings.TrimSpace(configured)
+	if v == "" {
+		if rec := strings.TrimSpace(s.hwInfo.RecommendedBackend); rec != "" {
+			v = rec
+		} else {
+			v = defaultBackendForHost()
+		}
+	}
+	switch runtime.GOOS {
+	case "darwin":
+		if v == "cuda" || v == "vulkan" || v == "rocm" {
+			return "metal"
+		}
+	case "windows":
+		if v == "metal" || v == "rocm" {
+			return "cpu"
+		}
+	case "linux":
+		if v == "metal" {
+			return "cpu"
+		}
+	}
+	return v
+}
+
+// GetInstalledBackend checks if the server executable is installed and which version/variant.
 func (s *LlamaService) GetInstalledBackend() BackendStatus {
 	return s.releaseMgr.GetInstalledBackend()
 }
@@ -385,7 +415,7 @@ func (s *LlamaService) CheckReleases() ([]ReleaseInfo, error) {
 	return s.releaseMgr.CheckReleases()
 }
 
-// DownloadBackend downloads and installs the selected release tag and variant (cuda, vulkan, cpu).
+// DownloadBackend downloads and installs the selected release tag and variant.
 func (s *LlamaService) DownloadBackend(tag, variant string) error {
 	err := s.releaseMgr.DownloadAndInstall(tag, variant, func(p ProgressReport) {
 		s.mu.Lock()
@@ -517,7 +547,7 @@ func (s *LlamaService) SaveServerConfig(cfg ServerConfig) error {
 	return nil
 }
 
-// StartServer launches llama-server.exe with the specified configuration.
+// StartServer launches the server executable with the specified configuration.
 func (s *LlamaService) StartServer(cfg ServerConfig) error {
 	if cfg.RouterMode && cfg.ModelsDir == "" {
 		cfg.ModelsDir = s.modelMgr.GetModelsDir()
@@ -535,7 +565,7 @@ func (s *LlamaService) StartServer(cfg ServerConfig) error {
 	return err
 }
 
-// StopServer stops the running llama-server.exe process.
+// StopServer stops the running server process.
 func (s *LlamaService) StopServer() error {
 	err := s.serverMgr.Stop()
 	if err == nil {
@@ -582,27 +612,39 @@ func (s *LlamaService) RunDiagnostics() TroubleshootReport {
 	return RunDiagnostics(binDir, modelsDir, variant, port, hw)
 }
 
-// RepairBackend executes an automated repair action for reported issues.
+// RepairBackend executes an automated repair action for reported issues,
+// resolving the target backend for the current OS (CUDA requested on macOS
+// repairs Metal instead, etc.).
 func (s *LlamaService) RepairBackend(action string) error {
 	switch action {
 	case "kill_zombies":
 		return KillZombieProcesses()
 	case "download_cudart":
-		return s.SwitchBackend("cuda")
+		s.mu.Lock()
+		variant := s.settings.ActiveBackend
+		s.mu.Unlock()
+		if strings.TrimSpace(variant) == "" || variant == "cuda" {
+			// Missing CUDA runtime libraries: reinstall the CUDA backend
+			// where supported, otherwise fall back per OS.
+			if strings.TrimSpace(variant) == "" {
+				variant = "cuda"
+			}
+		}
+		return s.SwitchBackend(s.repairVariantForHost(variant))
 	case "reinstall":
 		s.mu.Lock()
 		variant := s.settings.ActiveBackend
 		s.mu.Unlock()
-		if variant == "" {
-			variant = "cuda"
-		}
-		return s.SwitchBackend(variant)
+		return s.SwitchBackend(s.repairVariantForHost(variant))
 	default:
-		return s.SwitchBackend("cuda")
+		s.mu.Lock()
+		variant := s.settings.ActiveBackend
+		s.mu.Unlock()
+		return s.SwitchBackend(s.repairVariantForHost(variant))
 	}
 }
 
-// KillZombieServers terminates any orphaned llama-server.exe processes.
+// KillZombieServers terminates any orphaned server processes.
 func (s *LlamaService) KillZombieServers() error {
 	return KillZombieProcesses()
 }

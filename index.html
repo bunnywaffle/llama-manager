@@ -93,8 +93,8 @@
             <!-- Alert if backend missing -->
             <div class="alert-box" id="backend-missing-alert" style="display: none;">
               <div>
-                <div class="alert-text">llama-server.exe is not installed</div>
-                <div class="alert-sub">Download the official prebuilt Windows CUDA 12.4 binary to start running models.</div>
+                <div class="alert-text">llama-server is not installed</div>
+                <div class="alert-sub">Download the official prebuilt backend for your system (CUDA, Vulkan, ROCm, CPU, or Metal) to start running models.</div>
               </div>
               <div style="display: flex; gap: 8px;">
                 <button class="btn btn-secondary btn-sm btn-open-troubleshoot">
@@ -879,7 +879,7 @@
                 </div>
                 <div class="metric-box">
                   <div class="metric-meta">Executable Path</div>
-                  <div class="metric-data metric-mono" style="font-size: 12.5px;" id="backend-path-text">bin/llama-server.exe</div>
+                  <div class="metric-data metric-mono" style="font-size: 12.5px;" id="backend-path-text">bin/llama-server</div>
                 </div>
               </div>
             </div>
@@ -956,11 +956,11 @@
                 <label class="form-label">Models Storage Directory</label>
                 <div class="path-input-group">
                   <input type="text" class="form-input path-input" id="settings-models-dir" readonly />
-                  <button class="btn btn-secondary btn-sm" id="btn-browse-models-dir" title="Select directory using Windows dialog">
+                  <button class="btn btn-secondary btn-sm" id="btn-browse-models-dir" title="Select directory using system dialog">
                     <i data-lucide="folder-input"></i>
                     <span>Browse...</span>
                   </button>
-                  <button class="btn btn-secondary btn-sm" id="btn-open-models-dir" title="Open directory in Windows File Explorer">
+                  <button class="btn btn-secondary btn-sm" id="btn-open-models-dir" title="Open directory in file manager">
                     <i data-lucide="folder"></i>
                     <span>Explorer</span>
                   </button>
@@ -994,12 +994,12 @@
                     <i data-lucide="folder-input"></i>
                     <span>Browse...</span>
                   </button>
-                  <button class="btn btn-secondary btn-sm" id="btn-open-appdata-dir" title="Open in Windows File Explorer">
+                  <button class="btn btn-secondary btn-sm" id="btn-open-appdata-dir" title="Open in file manager">
                     <i data-lucide="folder"></i>
                     <span>Explorer</span>
                   </button>
                 </div>
-                <div class="surface-desc" style="margin-top: 4px;">Contains `bin/llama-server.exe`, `version.txt`, and runtime logs.</div>
+                <div class="surface-desc" style="margin-top: 4px;">Contains the `llama-server` binary, `version.txt`, and runtime logs.</div>
               </div>
             </div>
           </div>
@@ -1074,7 +1074,7 @@
         </div>
         <div class="modal-body" style="max-height: 440px; overflow-y: auto;">
           <div style="font-size: 12.5px; color: var(--text-medium); margin-bottom: 10px;" id="diag-summary-text">
-            Scanning backend executable, runtime DLLs, ports, and permissions...
+            Scanning backend executable, runtime libraries, ports, and permissions...
           </div>
           <div id="diag-items-list" class="diag-list">
             <!-- Diagnostic checks rendered dynamically -->

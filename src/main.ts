@@ -243,6 +243,14 @@ let currentServerHost = "127.0.0.1";
 let currentServerPort = 8080;
 let currentServerStatus: ServerStatus | null = null;
 let chatHistory: ChatMessage[] = [];
+// Last known recommended backend from hardware detection; used as the
+// OS-appropriate fallback wherever a backend variant is displayed or
+// preselected before the backend status is known.
+let cachedRecommendedBackend = "cpu";
+
+function fallbackBackend(): string {
+  return cachedRecommendedBackend || "cpu";
+}
 
 interface AttachedImage {
   dataUrl: string;
@@ -475,6 +483,7 @@ function setupSliders() {
 async function loadHardware() {
   try {
     const hw = await LlamaService.getHardware();
+    cachedRecommendedBackend = hw.recommendedBackend || "cpu";
     const platEl = $("#hw-platform-tag");
     if (platEl) platEl.textContent = hw.platformDisplay || `${hw.os} (${hw.arch})`;
 
@@ -520,8 +529,8 @@ async function loadBackendStatus() {
       badge.textContent = "Installed";
       badge.className = "tag-badge accent";
       verText.textContent = b.version || "Installed";
-      varText.textContent = (b.variant || "cuda").toUpperCase();
-      $("#dash-backend-val").textContent = `${(b.variant || "cuda").toUpperCase()} (${b.version || "Installed"})`;
+      varText.textContent = (b.variant || fallbackBackend()).toUpperCase();
+      $("#dash-backend-val").textContent = `${(b.variant || fallbackBackend()).toUpperCase()} (${b.version || "Installed"})`;
       if (uninstallBtn) uninstallBtn.style.display = "inline-flex";
     } else {
       alert.style.display = "flex";
@@ -1450,9 +1459,9 @@ async function loadReleases() {
         <option value="cpu">CPU (Standard)</option>
       `;
     } else {
-      // Windows
+      // Other desktop OS (Windows/Linux)
       variantOptionsHtml = `
-        <option value="cuda" ${hw.recommendedBackend === "cuda" ? "selected" : ""}>CUDA 12.4 (NVIDIA)</option>
+        <option value="cuda" ${hw.recommendedBackend === "cuda" ? "selected" : ""}>CUDA (NVIDIA)</option>
         <option value="vulkan" ${hw.recommendedBackend === "vulkan" ? "selected" : ""}>Vulkan (AMD / Universal)</option>
         <option value="cpu">CPU (Standard)</option>
       `;
@@ -1484,7 +1493,7 @@ async function loadReleases() {
         const tag = b.getAttribute("data-tag");
         if (!tag) return;
         const sel = document.querySelector<HTMLSelectElement>(`#rel-var-${tag}`);
-        const v = sel?.value || "cuda";
+        const v = sel?.value || fallbackBackend();
 
         b.setAttribute("disabled", "true");
         try {
@@ -1547,7 +1556,7 @@ async function loadSettings() {
 
     const backendTag = document.querySelector<HTMLElement>("#settings-current-backend-tag");
     if (backendTag) {
-      backendTag.textContent = (s.activeBackend || "cuda").toUpperCase();
+      backendTag.textContent = (s.activeBackend || fallbackBackend()).toUpperCase();
     }
 
     const defSelect = document.querySelector<HTMLSelectElement>("#settings-default-model-select");
@@ -1870,7 +1879,7 @@ function setupTroubleshoot() {
 
   async function runScan() {
     if (!list || !summary) return;
-    summary.textContent = "Scanning backend executable, runtime DLLs, ports, and permissions...";
+    summary.textContent = "Scanning backend executable, runtime libraries, ports, and permissions...";
     list.innerHTML = `<div style="text-align: center; color: var(--text-low); padding: 18px;">Running diagnostics...</div>`;
 
     try {
