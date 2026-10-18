@@ -68,20 +68,22 @@ func RunDiagnostics(binDir, modelsDir, variant string, port int, hw HardwareInfo
 			Message:   fmt.Sprintf("Binary not found at %s. Please install the backend.", exePath),
 			FixAction: "reinstall",
 		})
-	} else if info.Size() < 1024*1024 {
+	} else if info.Size() < 4096 {
 		report.Items = append(report.Items, DiagnosticItem{
 			Category:  "executable",
 			Title:     exeName + " Executable",
 			Status:    "error",
-			Message:   fmt.Sprintf("Binary file size is only %d bytes (corrupted or truncated).", info.Size()),
+			Message:   fmt.Sprintf("Binary file size is only %d bytes (corrupted or empty).", info.Size()),
 			FixAction: "reinstall",
 		})
 	} else {
+		// Modern modular llama.cpp builds use a ~9KB-60KB launcher executable paired with
+		// modular engine libraries (llama-server-impl.dll / libllama-server-impl.so / libllama-server-impl.dylib).
 		report.Items = append(report.Items, DiagnosticItem{
 			Category: "executable",
 			Title:    exeName + " Executable",
 			Status:   "ok",
-			Message:  fmt.Sprintf("Verified binary exists (%d MB).", info.Size()/(1024*1024)),
+			Message:  fmt.Sprintf("Verified binary exists (%s).", formatBytes(info.Size())),
 		})
 	}
 
