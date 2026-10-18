@@ -307,7 +307,24 @@ func (sm *ServerManager) Start(cfg ServerConfig) error {
 
 	serverExe := filepath.Join(sm.binDir, getServerExeName())
 	if _, err := os.Stat(serverExe); err != nil {
-		return fmt.Errorf("%s not found in %s; please download the backend in Overview first", getServerExeName(), sm.binDir)
+		// Try resolving active executable from backends directory
+		backendsDir := filepath.Join(sm.appDataDir, "backends")
+		entries, _ := os.ReadDir(backendsDir)
+		for _, e := range entries {
+			if !e.IsDir() {
+				continue
+			}
+			candDir := filepath.Join(backendsDir, e.Name())
+			candExe := filepath.Join(candDir, getServerExeName())
+			if _, statErr := os.Stat(candExe); statErr == nil {
+				sm.binDir = candDir
+				serverExe = candExe
+				break
+			}
+		}
+	}
+	if _, err := os.Stat(serverExe); err != nil {
+		return fmt.Errorf("%s not found in %s; please install a backend variant in Releases first", getServerExeName(), sm.binDir)
 	}
 	if runtime.GOOS != "windows" {
 		_ = os.Chmod(serverExe, 0755)
@@ -620,6 +637,7 @@ func (sm *ServerManager) Stop() error {
 
 	if !sm.running || sm.cmd == nil || sm.cmd.Process == nil {
 		_ = KillZombieProcesses()
+		time.Sleep(100 * time.Millisecond)
 		return nil
 	}
 
@@ -632,6 +650,9 @@ func (sm *ServerManager) Stop() error {
 
 	// Clean up any lingering zombie child processes
 	_ = KillZombieProcesses()
+
+	// Wait briefly for OS to flush and release process file locks
+	time.Sleep(200 * time.Millisecond)
 
 	cb := sm.statusCallback
 	st := sm.getStatusLocked()

@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/egoist/mygo"
 )
@@ -99,6 +100,17 @@ func NewLlamaService(appDataDir string) *LlamaService {
 
 	// Ensure any zombie server processes from prior unclean shutdowns are purged to free GPU VRAM
 	_ = KillZombieProcesses()
+
+	// Ensure serverMgr is pointed to active installed version if present
+	for _, v := range svc.releaseMgr.GetInstalledVersions() {
+		if v.IsActive {
+			dir := filepath.Dir(v.ExecutablePath)
+			if dir != "" {
+				svc.serverMgr.SetBinDir(dir)
+			}
+			break
+		}
+	}
 
 	return svc
 }
@@ -419,9 +431,18 @@ func (s *LlamaService) GetInstalledVersions() []InstalledVersionInfo {
 // ActivateVersion sets a specific installed version (by ID) as the active/current runtime.
 func (s *LlamaService) ActivateVersion(id string) error {
 	_ = s.serverMgr.Stop()
+	_ = KillZombieProcesses()
+	time.Sleep(150 * time.Millisecond)
 
 	if err := s.releaseMgr.ActivateVersion(id); err != nil {
 		return err
+	}
+
+	targetDir := s.releaseMgr.GetVersionDir(id)
+	if targetDir != "" {
+		s.serverMgr.SetBinDir(targetDir)
+	} else {
+		s.serverMgr.SetBinDir(s.releaseMgr.binDir)
 	}
 
 	current := s.releaseMgr.GetInstalledBackend()
@@ -456,6 +477,8 @@ func (s *LlamaService) UninstallVersion(id string) error {
 
 	if isActive {
 		_ = s.serverMgr.Stop()
+		_ = KillZombieProcesses()
+		time.Sleep(150 * time.Millisecond)
 	}
 
 	if err := s.releaseMgr.UninstallVersion(id); err != nil {
@@ -466,12 +489,17 @@ func (s *LlamaService) UninstallVersion(id string) error {
 		remaining := s.releaseMgr.GetInstalledVersions()
 		if len(remaining) > 0 {
 			_ = s.releaseMgr.ActivateVersion(remaining[0].Id)
+			targetDir := s.releaseMgr.GetVersionDir(remaining[0].Id)
+			if targetDir != "" {
+				s.serverMgr.SetBinDir(targetDir)
+			}
 			s.mu.Lock()
 			s.settings.ActiveBackend = remaining[0].Variant
 			s.settings.ActiveVersion = remaining[0].Tag
 			_ = s.saveSettingsToFile()
 			s.mu.Unlock()
 		} else {
+			s.serverMgr.SetBinDir(s.releaseMgr.binDir)
 			s.mu.Lock()
 			s.settings.ActiveBackend = ""
 			s.settings.ActiveVersion = ""
@@ -497,6 +525,8 @@ func (s *LlamaService) CheckReleases() ([]ReleaseInfo, error) {
 // DownloadBackend downloads and installs the selected release tag and variant.
 func (s *LlamaService) DownloadBackend(tag, variant string) error {
 	_ = s.serverMgr.Stop()
+	_ = KillZombieProcesses()
+	time.Sleep(150 * time.Millisecond)
 
 	err := s.releaseMgr.DownloadAndInstall(tag, variant, func(p ProgressReport) {
 		s.mu.Lock()
@@ -507,6 +537,14 @@ func (s *LlamaService) DownloadBackend(tag, variant string) error {
 		}
 	})
 	if err == nil {
+		versionId := fmt.Sprintf("%s-%s", sanitizeDirName(tag), variant)
+		targetDir := s.releaseMgr.GetVersionDir(versionId)
+		if targetDir != "" {
+			s.serverMgr.SetBinDir(targetDir)
+		} else {
+			s.serverMgr.SetBinDir(s.releaseMgr.binDir)
+		}
+
 		current := s.releaseMgr.GetInstalledBackend()
 		s.mu.Lock()
 		s.settings.ActiveBackend = current.Variant

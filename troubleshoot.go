@@ -427,11 +427,13 @@ func KillZombieProcesses() error {
 	if runtime.GOOS == "windows" {
 		cmd := prepareCmd(exec.Command("taskkill", "/F", "/IM", "llama-server.exe", "/T"))
 		_ = cmd.Run()
+		time.Sleep(150 * time.Millisecond)
 	} else {
 		cmd := prepareCmd(exec.Command("pkill", "-x", "llama-server"))
 		_ = cmd.Run()
 		cmd2 := prepareCmd(exec.Command("killall", "-9", "llama-server"))
 		_ = cmd2.Run()
+		time.Sleep(50 * time.Millisecond)
 	}
 	return nil
 }

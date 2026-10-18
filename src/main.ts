@@ -422,6 +422,7 @@ async function init() {
     loadServerStatus(),
     loadLogs(),
     loadSettings(),
+    renderInstalledVersions(),
   ]);
 
   renderIcons();
@@ -1736,13 +1737,17 @@ async function loadReleases() {
   tbody.innerHTML = `<tr><td colspan="5" style="text-align: center; color: var(--text-low); padding: 18px;">Checking GitHub releases...</td></tr>`;
 
   try {
-    const [releases, hw, versions] = await Promise.all([
+    cachedInstalledVersions = (await LlamaService.getInstalledVersions()) || [];
+    await renderInstalledVersions();
+  } catch (e) {
+    console.warn("Failed to load installed versions:", e);
+  }
+
+  try {
+    const [releases, hw] = await Promise.all([
       LlamaService.checkReleases(),
       LlamaService.getHardware(),
-      LlamaService.getInstalledVersions(),
     ]);
-    cachedInstalledVersions = versions || [];
-    await renderInstalledVersions();
     tbody.innerHTML = "";
 
     if (!releases || releases.length === 0) {

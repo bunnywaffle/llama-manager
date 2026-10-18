@@ -106,24 +106,36 @@ func (mm *ModelManager) ListModels() ([]ModelInfo, error) {
 	var models []ModelInfo
 	seenPaths := make(map[string]bool)
 
-	// 1. Scan default models directory (including symlinks)
-	entries, err := os.ReadDir(dir)
-	if err == nil {
-		for _, entry := range entries {
-			if entry.IsDir() || !strings.HasSuffix(strings.ToLower(entry.Name()), ".gguf") {
-				continue
+	// 1. Scan default models directory (including subdirectories and symlinks)
+	if dir != "" {
+		_ = filepath.Walk(dir, func(p string, info os.FileInfo, walkErr error) error {
+			if walkErr != nil {
+				return nil
+			}
+			if info.IsDir() {
+				rel, relErr := filepath.Rel(dir, p)
+				if relErr == nil && (strings.HasPrefix(info.Name(), ".") || strings.Count(filepath.ToSlash(rel), "/") > 3) {
+					return filepath.SkipDir
+				}
+				return nil
 			}
 
-			p := filepath.Join(dir, entry.Name())
+			if !strings.HasSuffix(strings.ToLower(info.Name()), ".gguf") {
+				return nil
+			}
+
 			targetInfo, err := os.Stat(p) // Resolves symlink to inspect target file
 			if err != nil || targetInfo.Size() < 1024*1024 {
-				continue // Skip corrupt or 0-byte files or broken symlinks
+				return nil // Skip corrupt or 0-byte files or broken symlinks
 			}
 
 			lstatInfo, _ := os.Lstat(p)
 			isSymlink := lstatInfo != nil && (lstatInfo.Mode()&os.ModeSymlink != 0)
 
 			cleanP := filepath.Clean(p)
+			if seenPaths[cleanP] {
+				return nil
+			}
 			seenPaths[cleanP] = true
 			if isSymlink {
 				if realTarget, err := filepath.EvalSymlinks(p); err == nil {
@@ -131,16 +143,23 @@ func (mm *ModelManager) ListModels() ([]ModelInfo, error) {
 				}
 			}
 
+			rel, _ := filepath.Rel(dir, p)
+			displayName := info.Name()
+			if rel != "" && filepath.Dir(rel) != "." {
+				displayName = fmt.Sprintf("%s (%s)", info.Name(), filepath.Dir(rel))
+			}
+
 			models = append(models, ModelInfo{
-				Name:          entry.Name(),
+				Name:          displayName,
 				Path:          p,
 				SizeBytes:     targetInfo.Size(),
 				SizeFormatted: formatBytes(targetInfo.Size()),
-				Quant:         detectQuant(entry.Name()),
+				Quant:         detectQuant(info.Name()),
 				ModifiedAt:    targetInfo.ModTime().Format("2006-01-02 15:04"),
 				IsExternal:    isSymlink,
 			})
-		}
+			return nil
+		})
 	}
 
 	// 2. Scan registered external model files

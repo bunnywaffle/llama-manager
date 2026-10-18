@@ -331,6 +331,37 @@ func (rm *ReleaseManager) GetInstalledBackend() BackendStatus {
 		status.Variant = "unknown"
 	}
 
+	// Auto-recovery: If rm.binDir does not have the executable, inspect backendsDir
+	if !status.Installed {
+		backendsDir := filepath.Join(rm.appDataDir, "backends")
+		entries, _ := os.ReadDir(backendsDir)
+		for _, e := range entries {
+			if !e.IsDir() {
+				continue
+			}
+			candDir := filepath.Join(backendsDir, e.Name())
+			candExe := filepath.Join(candDir, getServerExeName())
+			if _, err := os.Stat(candExe); err == nil {
+				status.HasServer = true
+				status.Installed = true
+				status.ExecutablePath = candExe
+				if vData, err := os.ReadFile(filepath.Join(candDir, "version.txt")); err == nil {
+					lines := strings.Split(strings.TrimSpace(string(vData)), "\n")
+					if len(lines) > 0 {
+						status.Version = strings.TrimSpace(lines[0])
+					}
+					if len(lines) > 1 {
+						status.Variant = strings.TrimSpace(lines[1])
+					}
+				} else {
+					status.Version = "Installed"
+					status.Variant = "unknown"
+				}
+				break
+			}
+		}
+	}
+
 	return status
 }
 
@@ -501,9 +532,33 @@ func (rm *ReleaseManager) GetInstalledVersions() []InstalledVersionInfo {
 			variant = "cpu"
 		}
 
+		canonicalId := fmt.Sprintf("%s-%s", sanitizeDirName(tag), variant)
+		if e.Name() == variant {
+			// Legacy bare variant folder (e.g. "cuda")
+			canonicalDir := filepath.Join(backendsDir, canonicalId)
+			if _, statErr := os.Stat(canonicalDir); statErr == nil {
+				// Canonical versioned folder already exists!
+				if activeId == e.Name() || activeId == variant {
+					activeId = canonicalId
+				}
+				_ = os.RemoveAll(subDir)
+				continue
+			} else {
+				// Migrate bare variant folder to canonical folder
+				if err := os.Rename(subDir, canonicalDir); err == nil {
+					subDir = canonicalDir
+					id = canonicalId
+					_ = os.WriteFile(filepath.Join(subDir, "version.txt"), []byte(fmt.Sprintf("%s\n%s\n%s\n", tag, variant, id)), 0644)
+					if activeId == e.Name() || activeId == variant {
+						activeId = canonicalId
+					}
+				}
+			}
+		}
+
 		isActive := false
 		if hasBinExe {
-			if activeId != "" && (activeId == id || activeId == e.Name()) {
+			if activeId != "" && (activeId == id || activeId == e.Name() || activeId == canonicalId) {
 				isActive = true
 			} else if activeId == "" && activeTag == tag && (activeVariant == variant || activeVariant == "") {
 				isActive = true
@@ -582,6 +637,86 @@ func (rm *ReleaseManager) GetInstalledVersions() []InstalledVersionInfo {
 	return results
 }
 
+func removeDirOrLink(path string) error {
+	fi, err := os.Lstat(path)
+	if err != nil {
+		return nil // doesn't exist
+	}
+
+	if runtime.GOOS == "windows" {
+		// If junction or symlink, rmdir cleanly unlinks without deleting target contents
+		if fi.Mode()&os.ModeSymlink != 0 {
+			_ = os.Remove(path)
+		}
+		cmd := prepareCmd(exec.Command("cmd", "/c", "rmdir", path))
+		if err := cmd.Run(); err == nil {
+			return nil
+		}
+		// If regular directory, try rmdir /s /q with backoff retries
+		for attempt := 0; attempt < 3; attempt++ {
+			cmdAll := prepareCmd(exec.Command("cmd", "/c", "rmdir", "/s", "/q", path))
+			if err := cmdAll.Run(); err == nil {
+				if _, statErr := os.Stat(path); os.IsNotExist(statErr) {
+					return nil
+				}
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+		return os.RemoveAll(path)
+	}
+
+	_ = os.Remove(path)
+	return os.RemoveAll(path)
+}
+
+func linkOrMirrorDir(targetDir, linkDir string) error {
+	_ = removeDirOrLink(linkDir)
+
+	// 1. On Windows, try creating an NTFS directory junction (instant, no admin elevation required)
+	if runtime.GOOS == "windows" {
+		cmd := prepareCmd(exec.Command("cmd", "/c", "mklink", "/J", linkDir, targetDir))
+		if out, err := cmd.CombinedOutput(); err == nil && !strings.Contains(strings.ToLower(string(out)), "error") {
+			return nil
+		}
+	}
+
+	// 2. On Unix (macOS / Linux), try creating a standard directory symlink
+	if runtime.GOOS != "windows" {
+		if err := os.Symlink(targetDir, linkDir); err == nil {
+			if runtime.GOOS == "darwin" {
+				_ = exec.Command("xattr", "-cr", linkDir).Run()
+			}
+			return nil
+		}
+	}
+
+	// 3. Fallback: Mirror directory files directly
+	_ = os.MkdirAll(linkDir, 0755)
+	return copyDir(targetDir, linkDir)
+}
+
+func (rm *ReleaseManager) GetVersionDir(id string) string {
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+
+	backendsDir := filepath.Join(rm.appDataDir, "backends")
+	targetDir := filepath.Join(backendsDir, id)
+	if _, err := os.Stat(filepath.Join(targetDir, getServerExeName())); err == nil {
+		return targetDir
+	}
+
+	entries, _ := os.ReadDir(backendsDir)
+	for _, e := range entries {
+		if e.IsDir() && (e.Name() == id || strings.HasSuffix(e.Name(), "-"+id)) {
+			cand := filepath.Join(backendsDir, e.Name())
+			if _, err := os.Stat(filepath.Join(cand, getServerExeName())); err == nil {
+				return cand
+			}
+		}
+	}
+	return ""
+}
+
 func (rm *ReleaseManager) ActivateVersion(id string) error {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
@@ -608,39 +743,38 @@ func (rm *ReleaseManager) ActivateVersion(id string) error {
 		}
 	}
 
-	_ = os.RemoveAll(rm.binDir)
-	_ = os.MkdirAll(rm.binDir, 0755)
-
-	if err := copyDir(targetDir, rm.binDir); err != nil {
-		return err
+	if runtime.GOOS != "windows" {
+		_ = os.Chmod(targetExe, 0755)
+		entries, _ := os.ReadDir(targetDir)
+		for _, e := range entries {
+			if !e.IsDir() {
+				_ = os.Chmod(filepath.Join(targetDir, e.Name()), 0755)
+			}
+		}
+	}
+	if runtime.GOOS == "darwin" {
+		_ = exec.Command("xattr", "-cr", targetDir).Run()
 	}
 
+	tag := ""
+	variant := ""
 	if vData, err := os.ReadFile(filepath.Join(targetDir, "version.txt")); err == nil {
 		lines := strings.Split(strings.TrimSpace(string(vData)), "\n")
-		tag := ""
-		variant := ""
 		if len(lines) > 0 {
 			tag = strings.TrimSpace(lines[0])
 		}
 		if len(lines) > 1 {
 			variant = strings.TrimSpace(lines[1])
 		}
-		_ = os.WriteFile(filepath.Join(rm.binDir, "version.txt"), []byte(fmt.Sprintf("%s\n%s\n%s\n", tag, variant, id)), 0644)
+	}
+	_ = os.WriteFile(filepath.Join(targetDir, "version.txt"), []byte(fmt.Sprintf("%s\n%s\n%s\n", tag, variant, id)), 0644)
+
+	// Link or mirror into rm.binDir
+	if err := linkOrMirrorDir(targetDir, rm.binDir); err != nil {
+		return err
 	}
 
-	activeExe := filepath.Join(rm.binDir, getServerExeName())
-	if runtime.GOOS != "windows" {
-		_ = os.Chmod(activeExe, 0755)
-		entries, _ := os.ReadDir(rm.binDir)
-		for _, e := range entries {
-			if !e.IsDir() {
-				_ = os.Chmod(filepath.Join(rm.binDir, e.Name()), 0755)
-			}
-		}
-	}
-	if runtime.GOOS == "darwin" {
-		_ = exec.Command("xattr", "-cr", rm.binDir).Run()
-	}
+	_ = os.WriteFile(filepath.Join(rm.binDir, "version.txt"), []byte(fmt.Sprintf("%s\n%s\n%s\n", tag, variant, id)), 0644)
 
 	return nil
 }
@@ -651,7 +785,7 @@ func (rm *ReleaseManager) UninstallVersion(id string) error {
 
 	backendsDir := filepath.Join(rm.appDataDir, "backends")
 	targetDir := filepath.Join(backendsDir, id)
-	_ = os.RemoveAll(targetDir)
+	_ = removeDirOrLink(targetDir)
 
 	binVersionFile := filepath.Join(rm.binDir, "version.txt")
 	isActive := false
@@ -672,7 +806,7 @@ func (rm *ReleaseManager) UninstallVersion(id string) error {
 	}
 
 	if isActive {
-		_ = os.RemoveAll(rm.binDir)
+		_ = removeDirOrLink(rm.binDir)
 		_ = os.MkdirAll(rm.binDir, 0755)
 	}
 
@@ -1003,27 +1137,11 @@ func (rm *ReleaseManager) DownloadAndInstall(tag, variant string, onProgress fun
 	versionFile := filepath.Join(targetDir, "version.txt")
 	_ = os.WriteFile(versionFile, []byte(fmt.Sprintf("%s\n%s\n%s\n", tag, variant, versionId)), 0644)
 
-	// Step 5: Mirror targetDir cleanly into rm.binDir as the active backend
-	_ = os.RemoveAll(rm.binDir)
-	_ = os.MkdirAll(rm.binDir, 0755)
-	_ = copyDir(targetDir, rm.binDir)
+	// Step 5: Link or mirror targetDir cleanly into rm.binDir as the active backend
+	_ = linkOrMirrorDir(targetDir, rm.binDir)
 
 	binVersionFile := filepath.Join(rm.binDir, "version.txt")
 	_ = os.WriteFile(binVersionFile, []byte(fmt.Sprintf("%s\n%s\n%s\n", tag, variant, versionId)), 0644)
-
-	binExe := filepath.Join(rm.binDir, serverExeName)
-	if runtime.GOOS != "windows" {
-		_ = os.Chmod(binExe, 0755)
-		entries, _ := os.ReadDir(rm.binDir)
-		for _, e := range entries {
-			if !e.IsDir() {
-				_ = os.Chmod(filepath.Join(rm.binDir, e.Name()), 0755)
-			}
-		}
-	}
-	if runtime.GOOS == "darwin" {
-		_ = exec.Command("xattr", "-cr", rm.binDir).Run()
-	}
 
 	onProgress(ProgressReport{
 		Task:     "download_llama",
@@ -1183,9 +1301,19 @@ func copyFile(src, dst string) error {
 	}
 	defer in.Close()
 
-	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0755)
-	if err != nil {
-		return err
+	_ = os.Chmod(dst, 0666)
+
+	var out *os.File
+	var openErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		out, openErr = os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0755)
+		if openErr == nil {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if openErr != nil {
+		return openErr
 	}
 	defer out.Close()
 
