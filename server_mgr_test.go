@@ -264,3 +264,27 @@ func TestVersionManagementLifecycle(t *testing.T) {
 		t.Fatalf("Expected 1 active version (b3900-cpu), got %+v", versionsAfter)
 	}
 }
+
+func TestRealStartServerIfExists(t *testing.T) {
+	modelPath := `E:\LLM\LLamaManager\FrogNano-4B-2609-Q6_K_L.gguf`
+	if _, err := os.Stat(modelPath); err != nil {
+		t.Skip("skipping real server test: local model not present")
+	}
+	appData := filepath.Join(os.Getenv("APPDATA"), "llama-manager")
+	svc := NewLlamaService(appData)
+	backend := svc.GetInstalledBackend()
+	if !backend.Installed {
+		t.Skip("skipping real server test: backend not installed")
+	}
+	cfg, err := svc.GetModelConfig(modelPath)
+	if err != nil {
+		t.Fatalf("GetModelConfig failed: %v", err)
+	}
+	if err := svc.StartServer(cfg); err != nil {
+		t.Fatalf("StartServer failed: %v", err)
+	}
+	_ = svc.StopServer()
+}
+
+
+

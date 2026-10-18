@@ -227,8 +227,8 @@ func (sm *ServerManager) GetModelConfig(modelPath string) (ServerConfig, error) 
 	return defaultCfg, nil
 }
 
-// SaveModelConfig writes the model's configuration into its individual JSON file.
-func (sm *ServerManager) SaveModelConfig(modelPath string, cfg ServerConfig) error {
+// saveModelConfigFile writes the model's configuration into its individual JSON file on disk.
+func (sm *ServerManager) saveModelConfigFile(modelPath string, cfg ServerConfig) error {
 	if modelPath == "" {
 		modelPath = cfg.ModelPath
 	}
@@ -253,12 +253,20 @@ func (sm *ServerManager) SaveModelConfig(modelPath string, cfg ServerConfig) err
 		_ = os.WriteFile(fallbackPath, data, 0644)
 	}
 
+	return writeErr
+}
+
+// SaveModelConfig writes the model's configuration into its individual JSON file and updates in-memory config.
+func (sm *ServerManager) SaveModelConfig(modelPath string, cfg ServerConfig) error {
+	writeErr := sm.saveModelConfigFile(modelPath, cfg)
+
 	sm.mu.Lock()
 	sm.cfg = cfg
 	sm.mu.Unlock()
 
 	return writeErr
 }
+
 
 func (sm *ServerManager) SetBinDir(dir string) {
 	sm.mu.Lock()
@@ -291,6 +299,55 @@ func (sm *ServerManager) SaveConfig(cfg ServerConfig) {
 }
 
 func (sm *ServerManager) Start(cfg ServerConfig) error {
+	exitChan, healthURL, err := sm.startProcess(cfg)
+	if err != nil {
+		return err
+	}
+
+	healthClient := http.Client{Timeout: 250 * time.Millisecond}
+	deadline := time.Now().Add(60 * time.Second)
+	startedSuccessfully := false
+
+	for time.Now().Before(deadline) {
+		select {
+		case err := <-exitChan:
+			sm.mu.Lock()
+			snippet := sm.getLastMeaningfulErrorLocked()
+			if snippet == "" {
+				snippet = sm.getLastErrorSnippetLocked()
+			}
+			sm.mu.Unlock()
+			return fmt.Errorf("llama-server failed to start (%v). %s", err, snippet)
+		case <-time.After(250 * time.Millisecond):
+			sm.mu.Lock()
+			isRunning := sm.running
+			sm.mu.Unlock()
+			if !isRunning {
+				sm.mu.Lock()
+				snippet := sm.getLastMeaningfulErrorLocked()
+				if snippet == "" {
+					snippet = sm.lastError
+				}
+				sm.mu.Unlock()
+				return fmt.Errorf("llama-server stopped unexpectedly during startup: %s", snippet)
+			}
+
+			// Test health endpoint: HTTP 200 (OK) or 503 (loading model) confirms the server is alive
+			if resp, err := healthClient.Get(healthURL); err == nil {
+				resp.Body.Close()
+				startedSuccessfully = true
+				break
+			}
+		}
+		if startedSuccessfully {
+			break
+		}
+	}
+
+	return nil
+}
+
+func (sm *ServerManager) startProcess(cfg ServerConfig) (chan error, string, error) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
@@ -325,7 +382,7 @@ func (sm *ServerManager) Start(cfg ServerConfig) error {
 		}
 	}
 	if _, err := os.Stat(serverExe); err != nil {
-		return fmt.Errorf("%s not found in %s; please install a backend variant in Releases first", getServerExeName(), sm.binDir)
+		return nil, "", fmt.Errorf("%s not found in %s; please install a backend variant in Releases first", getServerExeName(), sm.binDir)
 	}
 	if runtime.GOOS != "windows" {
 		_ = os.Chmod(serverExe, 0755)
@@ -339,28 +396,29 @@ func (sm *ServerManager) Start(cfg ServerConfig) error {
 
 	if !cfg.RouterMode {
 		if cfg.ModelPath == "" {
-			return fmt.Errorf("no model file selected")
+			return nil, "", fmt.Errorf("no model file selected")
 		}
 		st, err := os.Stat(cfg.ModelPath)
 		if err != nil {
-			return fmt.Errorf("selected model file does not exist: %s", cfg.ModelPath)
+			return nil, "", fmt.Errorf("selected model file does not exist: %s", cfg.ModelPath)
 		}
 		if st.Size() < 1024*1024 {
-			return fmt.Errorf("selected model file is invalid or empty (%d bytes): %s", st.Size(), cfg.ModelPath)
+			return nil, "", fmt.Errorf("selected model file is invalid or empty (%d bytes): %s", st.Size(), cfg.ModelPath)
 		}
 	} else {
 		if cfg.ModelsDir == "" {
-			return fmt.Errorf("models directory is not configured for Router Mode")
+			return nil, "", fmt.Errorf("models directory is not configured for Router Mode")
 		}
 	}
 
 	sm.cfg = cfg
 	sm.lastError = ""
 
-	// Automatically save this configuration for the model to its individual JSON file
+	// Automatically save this configuration for the model to its individual JSON file on disk
 	if !cfg.RouterMode && cfg.ModelPath != "" {
-		_ = sm.SaveModelConfig(cfg.ModelPath, cfg)
+		_ = sm.saveModelConfigFile(cfg.ModelPath, cfg)
 	}
+
 
 	// Build arguments
 	args := []string{
@@ -577,15 +635,15 @@ func (sm *ServerManager) Start(cfg ServerConfig) error {
 
 	stdoutPipe, err := cmd.StdoutPipe()
 	if err != nil {
-		return err
+		return nil, "", err
 	}
 	stderrPipe, err := cmd.StderrPipe()
 	if err != nil {
-		return err
+		return nil, "", err
 	}
 
 	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("failed to start llama-server: %w", err)
+		return nil, "", fmt.Errorf("failed to start llama-server: %w", err)
 	}
 
 	// Register with OS kernel job object / process tree tracking so child is terminated when app closes
@@ -594,6 +652,8 @@ func (sm *ServerManager) Start(cfg ServerConfig) error {
 	sm.cmd = cmd
 	sm.running = true
 	sm.startTime = time.Now()
+
+
 
 	// Read logs from stdout and stderr
 	go sm.streamLogs(stdoutPipe)
@@ -635,53 +695,8 @@ func (sm *ServerManager) Start(cfg ServerConfig) error {
 
 	sm.addLogLocked(fmt.Sprintf("[System] Started llama-server with model %s on %s:%d", filepath.Base(cfg.ModelPath), cfg.Host, cfg.Port))
 
-	// Release mutex temporarily while awaiting initial health confirmation or early exit
-	sm.mu.Unlock()
-
 	healthURL := fmt.Sprintf("http://%s:%d/health", cfg.Host, cfg.Port)
-	healthClient := http.Client{Timeout: 200 * time.Millisecond}
-
-	deadline := time.Now().Add(5 * time.Second)
-	startedSuccessfully := false
-
-	for time.Now().Before(deadline) {
-		select {
-		case err := <-exitChan:
-			sm.mu.Lock()
-			sm.running = false
-			snippet := sm.getLastMeaningfulErrorLocked()
-			if snippet == "" {
-				snippet = sm.getLastErrorSnippetLocked()
-			}
-			sm.mu.Unlock()
-			return fmt.Errorf("llama-server failed to start (%v). %s", err, snippet)
-		case <-time.After(200 * time.Millisecond):
-			sm.mu.Lock()
-			isRunning := sm.running
-			sm.mu.Unlock()
-			if !isRunning {
-				sm.mu.Lock()
-				snippet := sm.getLastMeaningfulErrorLocked()
-				if snippet == "" {
-					snippet = sm.lastError
-				}
-				sm.mu.Unlock()
-				return fmt.Errorf("llama-server stopped unexpectedly during startup: %s", snippet)
-			}
-
-			// Test health endpoint: HTTP 200 (OK) or 503 (loading model) confirms the server is alive
-			if resp, err := healthClient.Get(healthURL); err == nil {
-				resp.Body.Close()
-				startedSuccessfully = true
-				break
-			}
-		}
-		if startedSuccessfully {
-			break
-		}
-	}
-
-	return nil
+	return exitChan, healthURL, nil
 }
 
 func (sm *ServerManager) Stop() error {
