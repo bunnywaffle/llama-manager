@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -227,6 +228,42 @@ type BackendVariantInfo struct {
 	Devices        string `json:"devices,omitempty"`
 }
 
+// InstalledVersionInfo represents a specific installed build of llama.cpp.
+type InstalledVersionInfo struct {
+	Id             string `json:"id"`             // e.g. "b4000-cuda"
+	Tag            string `json:"tag"`            // e.g. "b4000"
+	Variant        string `json:"variant"`        // e.g. "cuda", "vulkan", "cpu", "metal", "rocm"
+	VariantName    string `json:"variantName"`    // e.g. "NVIDIA CUDA (RTX / GTX)"
+	ExecutablePath string `json:"executablePath"`
+	SizeBytes      int64  `json:"sizeBytes"`
+	SizeDisplay    string `json:"sizeDisplay"`    // e.g. "342 MB"
+	InstalledAt    string `json:"installedAt"`    // Formatted date string
+	IsActive       bool   `json:"isActive"`
+}
+
+func sanitizeDirName(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return "default"
+	}
+	invalid := []string{"/", "\\", ":", "*", "?", "\"", "<", ">", "|", " "}
+	for _, inv := range invalid {
+		s = strings.ReplaceAll(s, inv, "_")
+	}
+	return s
+}
+
+func dirSize(path string) int64 {
+	var total int64
+	_ = filepath.Walk(path, func(_ string, info os.FileInfo, err error) error {
+		if err == nil && !info.IsDir() {
+			total += info.Size()
+		}
+		return nil
+	})
+	return total
+}
+
 // ProgressReport reports progress of a background download/extract operation.
 type ProgressReport struct {
 	Task       string  `json:"task"` // "download_llama", "download_model", etc.
@@ -312,6 +349,7 @@ func (rm *ReleaseManager) GetInstalledBackends(activeVariant string) []BackendVa
 		variants = []string{"cuda", "vulkan", "cpu"}
 	}
 
+	serverExeName := getServerExeName()
 	var results []BackendVariantInfo
 	for _, v := range variants {
 		info := BackendVariantInfo{
@@ -321,23 +359,52 @@ func (rm *ReleaseManager) GetInstalledBackends(activeVariant string) []BackendVa
 		}
 
 		targetDir := filepath.Join(backendsDir, v)
-		targetExe := filepath.Join(targetDir, getServerExeName())
-		legacyExe := filepath.Join(rm.binDir, getServerExeName())
+		targetExe := filepath.Join(targetDir, serverExeName)
+		legacyExe := filepath.Join(rm.binDir, serverExeName)
 
 		var foundExe string
+		var foundDir string
 		if _, err := os.Stat(targetExe); err == nil {
 			foundExe = targetExe
+			foundDir = targetDir
 		} else if activeVariant == v {
 			if _, err := os.Stat(legacyExe); err == nil {
 				foundExe = legacyExe
-				targetDir = rm.binDir
+				foundDir = rm.binDir
+			}
+		}
+
+		// Also check if any backends/*-<variant> is installed
+		if foundExe == "" {
+			entries, _ := os.ReadDir(backendsDir)
+			for _, e := range entries {
+				if !e.IsDir() {
+					continue
+				}
+				candDir := filepath.Join(backendsDir, e.Name())
+				candExe := filepath.Join(candDir, serverExeName)
+				if _, err := os.Stat(candExe); err != nil {
+					continue
+				}
+				if vData, err := os.ReadFile(filepath.Join(candDir, "version.txt")); err == nil {
+					lines := strings.Split(strings.TrimSpace(string(vData)), "\n")
+					if len(lines) > 1 && strings.TrimSpace(lines[1]) == v {
+						foundExe = candExe
+						foundDir = candDir
+						break
+					}
+				} else if strings.HasSuffix(e.Name(), "-"+v) {
+					foundExe = candExe
+					foundDir = candDir
+					break
+				}
 			}
 		}
 
 		if foundExe != "" {
 			info.Installed = true
 			info.ExecutablePath = foundExe
-			if vData, err := os.ReadFile(filepath.Join(targetDir, "version.txt")); err == nil {
+			if vData, err := os.ReadFile(filepath.Join(foundDir, "version.txt")); err == nil {
 				lines := strings.Split(strings.TrimSpace(string(vData)), "\n")
 				if len(lines) > 0 {
 					info.Version = strings.TrimSpace(lines[0])
@@ -351,6 +418,265 @@ func (rm *ReleaseManager) GetInstalledBackends(activeVariant string) []BackendVa
 	}
 
 	return results
+}
+
+// GetInstalledVersions returns all installed llama.cpp builds across versions and backends.
+func (rm *ReleaseManager) GetInstalledVersions() []InstalledVersionInfo {
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+
+	backendsDir := filepath.Join(rm.appDataDir, "backends")
+	_ = os.MkdirAll(backendsDir, 0755)
+
+	serverExeName := getServerExeName()
+
+	activeTag := ""
+	activeVariant := ""
+	activeId := ""
+	if bData, err := os.ReadFile(filepath.Join(rm.binDir, "version.txt")); err == nil {
+		lines := strings.Split(strings.TrimSpace(string(bData)), "\n")
+		if len(lines) > 0 {
+			activeTag = strings.TrimSpace(lines[0])
+		}
+		if len(lines) > 1 {
+			activeVariant = strings.TrimSpace(lines[1])
+		}
+		if len(lines) > 2 {
+			activeId = strings.TrimSpace(lines[2])
+		}
+	}
+
+	hasBinExe := false
+	if _, err := os.Stat(filepath.Join(rm.binDir, serverExeName)); err == nil {
+		hasBinExe = true
+	}
+
+	entries, err := os.ReadDir(backendsDir)
+	if err != nil {
+		return nil
+	}
+
+	var results []InstalledVersionInfo
+	foundActive := false
+
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		subDir := filepath.Join(backendsDir, e.Name())
+		exePath := filepath.Join(subDir, serverExeName)
+		fi, err := os.Stat(exePath)
+		if err != nil {
+			continue
+		}
+
+		tag := ""
+		variant := ""
+		id := e.Name()
+
+		if vData, err := os.ReadFile(filepath.Join(subDir, "version.txt")); err == nil {
+			lines := strings.Split(strings.TrimSpace(string(vData)), "\n")
+			if len(lines) > 0 {
+				tag = strings.TrimSpace(lines[0])
+			}
+			if len(lines) > 1 {
+				variant = strings.TrimSpace(lines[1])
+			}
+			if len(lines) > 2 && strings.TrimSpace(lines[2]) != "" {
+				id = strings.TrimSpace(lines[2])
+			}
+		}
+
+		if tag == "" {
+			if idx := strings.LastIndex(e.Name(), "-"); idx > 0 {
+				tag = e.Name()[:idx]
+				if variant == "" {
+					variant = e.Name()[idx+1:]
+				}
+			} else {
+				tag = e.Name()
+			}
+		}
+		if variant == "" {
+			variant = "cpu"
+		}
+
+		isActive := false
+		if hasBinExe {
+			if activeId != "" && (activeId == id || activeId == e.Name()) {
+				isActive = true
+			} else if activeId == "" && activeTag == tag && (activeVariant == variant || activeVariant == "") {
+				isActive = true
+			}
+		}
+
+		if isActive {
+			foundActive = true
+		}
+
+		sz := dirSize(subDir)
+		modTime := fi.ModTime().Format("2006-01-02 15:04")
+
+		results = append(results, InstalledVersionInfo{
+			Id:             id,
+			Tag:            tag,
+			Variant:        variant,
+			VariantName:    formatBackendDisplayName(variant),
+			ExecutablePath: exePath,
+			SizeBytes:      sz,
+			SizeDisplay:    formatBytes(sz),
+			InstalledAt:    modTime,
+			IsActive:       isActive,
+		})
+	}
+
+	// Legacy fallback: If binDir has executable but backendsDir was empty
+	if hasBinExe && len(results) == 0 {
+		tag := activeTag
+		if tag == "" {
+			tag = "Installed"
+		}
+		variant := activeVariant
+		if variant == "" {
+			variant = defaultBackendForHost()
+		}
+		id := fmt.Sprintf("%s-%s", sanitizeDirName(tag), variant)
+		legacyTarget := filepath.Join(backendsDir, id)
+		_ = os.MkdirAll(legacyTarget, 0755)
+		_ = copyDir(rm.binDir, legacyTarget)
+		_ = os.WriteFile(filepath.Join(legacyTarget, "version.txt"), []byte(fmt.Sprintf("%s\n%s\n%s\n", tag, variant, id)), 0644)
+		_ = os.WriteFile(filepath.Join(rm.binDir, "version.txt"), []byte(fmt.Sprintf("%s\n%s\n%s\n", tag, variant, id)), 0644)
+
+		sz := dirSize(legacyTarget)
+		results = append(results, InstalledVersionInfo{
+			Id:             id,
+			Tag:            tag,
+			Variant:        variant,
+			VariantName:    formatBackendDisplayName(variant),
+			ExecutablePath: filepath.Join(legacyTarget, serverExeName),
+			SizeBytes:      sz,
+			SizeDisplay:    formatBytes(sz),
+			InstalledAt:    time.Now().Format("2006-01-02 15:04"),
+			IsActive:       true,
+		})
+		foundActive = true
+	} else if hasBinExe && !foundActive && len(results) > 0 {
+		for i := range results {
+			if results[i].Tag == activeTag || results[i].Variant == activeVariant {
+				results[i].IsActive = true
+				break
+			}
+		}
+	}
+
+	sort.Slice(results, func(i, j int) bool {
+		if results[i].IsActive != results[j].IsActive {
+			return results[i].IsActive
+		}
+		if results[i].Tag != results[j].Tag {
+			return results[i].Tag > results[j].Tag
+		}
+		return results[i].Variant < results[j].Variant
+	})
+
+	return results
+}
+
+func (rm *ReleaseManager) ActivateVersion(id string) error {
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+
+	backendsDir := filepath.Join(rm.appDataDir, "backends")
+	targetDir := filepath.Join(backendsDir, id)
+	targetExe := filepath.Join(targetDir, getServerExeName())
+
+	if _, err := os.Stat(targetExe); err != nil {
+		entries, _ := os.ReadDir(backendsDir)
+		for _, e := range entries {
+			if e.IsDir() && (e.Name() == id || strings.HasSuffix(e.Name(), "-"+id)) {
+				cand := filepath.Join(backendsDir, e.Name())
+				if _, err := os.Stat(filepath.Join(cand, getServerExeName())); err == nil {
+					targetDir = cand
+					targetExe = filepath.Join(cand, getServerExeName())
+					id = e.Name()
+					break
+				}
+			}
+		}
+		if _, err := os.Stat(targetExe); err != nil {
+			return fmt.Errorf("version %s is not installed in %s", id, targetDir)
+		}
+	}
+
+	_ = os.RemoveAll(rm.binDir)
+	_ = os.MkdirAll(rm.binDir, 0755)
+
+	if err := copyDir(targetDir, rm.binDir); err != nil {
+		return err
+	}
+
+	if vData, err := os.ReadFile(filepath.Join(targetDir, "version.txt")); err == nil {
+		lines := strings.Split(strings.TrimSpace(string(vData)), "\n")
+		tag := ""
+		variant := ""
+		if len(lines) > 0 {
+			tag = strings.TrimSpace(lines[0])
+		}
+		if len(lines) > 1 {
+			variant = strings.TrimSpace(lines[1])
+		}
+		_ = os.WriteFile(filepath.Join(rm.binDir, "version.txt"), []byte(fmt.Sprintf("%s\n%s\n%s\n", tag, variant, id)), 0644)
+	}
+
+	activeExe := filepath.Join(rm.binDir, getServerExeName())
+	if runtime.GOOS != "windows" {
+		_ = os.Chmod(activeExe, 0755)
+		entries, _ := os.ReadDir(rm.binDir)
+		for _, e := range entries {
+			if !e.IsDir() {
+				_ = os.Chmod(filepath.Join(rm.binDir, e.Name()), 0755)
+			}
+		}
+	}
+	if runtime.GOOS == "darwin" {
+		_ = exec.Command("xattr", "-cr", rm.binDir).Run()
+	}
+
+	return nil
+}
+
+func (rm *ReleaseManager) UninstallVersion(id string) error {
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+
+	backendsDir := filepath.Join(rm.appDataDir, "backends")
+	targetDir := filepath.Join(backendsDir, id)
+	_ = os.RemoveAll(targetDir)
+
+	binVersionFile := filepath.Join(rm.binDir, "version.txt")
+	isActive := false
+	if data, err := os.ReadFile(binVersionFile); err == nil {
+		lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+		if len(lines) >= 3 && strings.TrimSpace(lines[2]) == id {
+			isActive = true
+		} else if id == filepath.Base(targetDir) {
+			if len(lines) >= 2 {
+				tag := strings.TrimSpace(lines[0])
+				variant := strings.TrimSpace(lines[1])
+				expectedId := fmt.Sprintf("%s-%s", sanitizeDirName(tag), variant)
+				if id == expectedId || id == variant {
+					isActive = true
+				}
+			}
+		}
+	}
+
+	if isActive {
+		_ = os.RemoveAll(rm.binDir)
+		_ = os.MkdirAll(rm.binDir, 0755)
+	}
+
+	return nil
 }
 
 func formatBackendDisplayName(v string) string {
@@ -378,6 +704,13 @@ func (rm *ReleaseManager) UninstallBackend(variant, activeVariant string) error 
 	targetDir := filepath.Join(backendsDir, variant)
 	_ = os.RemoveAll(targetDir)
 
+	entries, _ := os.ReadDir(backendsDir)
+	for _, e := range entries {
+		if e.IsDir() && strings.HasSuffix(e.Name(), "-"+variant) {
+			_ = os.RemoveAll(filepath.Join(backendsDir, e.Name()))
+		}
+	}
+
 	if variant == activeVariant || activeVariant == "" {
 		_ = os.RemoveAll(rm.binDir)
 		_ = os.MkdirAll(rm.binDir, 0755)
@@ -401,39 +734,42 @@ func (rm *ReleaseManager) UninstallAllBackends() error {
 }
 
 func (rm *ReleaseManager) ActivateBackend(variant string) error {
-	rm.mu.Lock()
-	defer rm.mu.Unlock()
-
 	backendsDir := filepath.Join(rm.appDataDir, "backends")
 	targetDir := filepath.Join(backendsDir, variant)
 	targetExe := filepath.Join(targetDir, getServerExeName())
 
-	if _, err := os.Stat(targetExe); err != nil {
-		return fmt.Errorf("backend %s is not installed in %s", variant, targetDir)
-	}
-
-	_ = os.RemoveAll(rm.binDir)
-	_ = os.MkdirAll(rm.binDir, 0755)
-
-	if err := copyDir(targetDir, rm.binDir); err != nil {
-		return err
-	}
-
-	activeExe := filepath.Join(rm.binDir, getServerExeName())
-	if runtime.GOOS != "windows" {
-		_ = os.Chmod(activeExe, 0755)
-		entries, _ := os.ReadDir(rm.binDir)
-		for _, e := range entries {
+	var chosenId string
+	if _, err := os.Stat(targetExe); err == nil {
+		chosenId = variant
+	} else {
+		entries, _ := os.ReadDir(backendsDir)
+		for i := len(entries) - 1; i >= 0; i-- {
+			e := entries[i]
 			if !e.IsDir() {
-				_ = os.Chmod(filepath.Join(rm.binDir, e.Name()), 0755)
+				continue
+			}
+			candDir := filepath.Join(backendsDir, e.Name())
+			if _, err := os.Stat(filepath.Join(candDir, getServerExeName())); err != nil {
+				continue
+			}
+			if vData, err := os.ReadFile(filepath.Join(candDir, "version.txt")); err == nil {
+				lines := strings.Split(strings.TrimSpace(string(vData)), "\n")
+				if len(lines) > 1 && strings.TrimSpace(lines[1]) == variant {
+					chosenId = e.Name()
+					break
+				}
+			} else if strings.HasSuffix(e.Name(), "-"+variant) {
+				chosenId = e.Name()
+				break
 			}
 		}
 	}
-	if runtime.GOOS == "darwin" {
-		_ = exec.Command("xattr", "-cr", rm.binDir).Run()
+
+	if chosenId == "" {
+		return fmt.Errorf("backend %s is not installed in %s", variant, backendsDir)
 	}
 
-	return nil
+	return rm.ActivateVersion(chosenId)
 }
 
 func (rm *ReleaseManager) CheckReleases() ([]ReleaseInfo, error) {
@@ -592,8 +928,13 @@ func (rm *ReleaseManager) DownloadAndInstall(tag, variant string, onProgress fun
 		}
 	}
 
+	versionId := fmt.Sprintf("%s-%s", sanitizeDirName(tag), variant)
+	if strings.TrimSpace(tag) == "" {
+		versionId = variant
+	}
+
 	backendsDir := filepath.Join(rm.appDataDir, "backends")
-	targetDir := filepath.Join(backendsDir, variant)
+	targetDir := filepath.Join(backendsDir, versionId)
 	_ = os.RemoveAll(targetDir)
 	_ = os.MkdirAll(targetDir, 0755)
 
@@ -658,14 +999,17 @@ func (rm *ReleaseManager) DownloadAndInstall(tag, variant string, onProgress fun
 		_ = exec.Command("xattr", "-cr", targetDir).Run()
 	}
 
-	// Write version tag and variant in targetDir
+	// Write version tag, variant, and versionId in targetDir
 	versionFile := filepath.Join(targetDir, "version.txt")
-	_ = os.WriteFile(versionFile, []byte(fmt.Sprintf("%s\n%s\n", tag, variant)), 0644)
+	_ = os.WriteFile(versionFile, []byte(fmt.Sprintf("%s\n%s\n%s\n", tag, variant, versionId)), 0644)
 
 	// Step 5: Mirror targetDir cleanly into rm.binDir as the active backend
 	_ = os.RemoveAll(rm.binDir)
 	_ = os.MkdirAll(rm.binDir, 0755)
 	_ = copyDir(targetDir, rm.binDir)
+
+	binVersionFile := filepath.Join(rm.binDir, "version.txt")
+	_ = os.WriteFile(binVersionFile, []byte(fmt.Sprintf("%s\n%s\n%s\n", tag, variant, versionId)), 0644)
 
 	binExe := filepath.Join(rm.binDir, serverExeName)
 	if runtime.GOOS != "windows" {

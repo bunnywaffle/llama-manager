@@ -178,3 +178,89 @@ func TestTarGzExtractionWithSymlinks(t *testing.T) {
 		t.Fatalf("Failed to find extracted llama-server: %v", err)
 	}
 }
+
+func TestVersionManagementLifecycle(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "llama_version_test_*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	binDir := filepath.Join(tempDir, "bin")
+	backendsDir := filepath.Join(tempDir, "backends")
+	_ = os.MkdirAll(binDir, 0755)
+	_ = os.MkdirAll(backendsDir, 0755)
+
+	serverExeName := getServerExeName()
+
+	// 1. Create mock version b4000-cuda
+	dir4000 := filepath.Join(backendsDir, "b4000-cuda")
+	_ = os.MkdirAll(dir4000, 0755)
+	_ = os.WriteFile(filepath.Join(dir4000, serverExeName), []byte("mock-exe-4000"), 0755)
+	_ = os.WriteFile(filepath.Join(dir4000, "version.txt"), []byte("b4000\ncuda\nb4000-cuda\n"), 0644)
+
+	// 2. Create mock version b3900-cpu
+	dir3900 := filepath.Join(backendsDir, "b3900-cpu")
+	_ = os.MkdirAll(dir3900, 0755)
+	_ = os.WriteFile(filepath.Join(dir3900, serverExeName), []byte("mock-exe-3900"), 0755)
+	_ = os.WriteFile(filepath.Join(dir3900, "version.txt"), []byte("b3900\ncpu\nb3900-cpu\n"), 0644)
+
+	rm := NewReleaseManager(binDir, tempDir)
+
+	// Activate b4000-cuda
+	if err := rm.ActivateVersion("b4000-cuda"); err != nil {
+		t.Fatalf("ActivateVersion failed: %v", err)
+	}
+
+	// Verify binDir has b4000-cuda
+	binContent, err := os.ReadFile(filepath.Join(binDir, serverExeName))
+	if err != nil || string(binContent) != "mock-exe-4000" {
+		t.Fatalf("Expected mock-exe-4000 in binDir, got %s, err: %v", string(binContent), err)
+	}
+
+	// Check GetInstalledVersions
+	versions := rm.GetInstalledVersions()
+	if len(versions) != 2 {
+		t.Fatalf("Expected 2 installed versions, got %d", len(versions))
+	}
+
+	var activeVersion, inactiveVersion *InstalledVersionInfo
+	for i := range versions {
+		if versions[i].IsActive {
+			activeVersion = &versions[i]
+		} else {
+			inactiveVersion = &versions[i]
+		}
+	}
+
+	if activeVersion == nil || activeVersion.Id != "b4000-cuda" {
+		t.Fatalf("Expected b4000-cuda to be active, got %+v", activeVersion)
+	}
+	if inactiveVersion == nil || inactiveVersion.Id != "b3900-cpu" {
+		t.Fatalf("Expected b3900-cpu to be inactive, got %+v", inactiveVersion)
+	}
+
+	// Switch active version to b3900-cpu
+	if err := rm.ActivateVersion("b3900-cpu"); err != nil {
+		t.Fatalf("Failed to activate b3900-cpu: %v", err)
+	}
+
+	binContent2, err := os.ReadFile(filepath.Join(binDir, serverExeName))
+	if err != nil || string(binContent2) != "mock-exe-3900" {
+		t.Fatalf("Expected mock-exe-3900 in binDir after switch, got %s, err: %v", string(binContent2), err)
+	}
+
+	// Uninstall b4000-cuda
+	if err := rm.UninstallVersion("b4000-cuda"); err != nil {
+		t.Fatalf("UninstallVersion failed: %v", err)
+	}
+
+	if _, err := os.Stat(dir4000); !os.IsNotExist(err) {
+		t.Fatalf("Expected dir4000 to be deleted, err: %v", err)
+	}
+
+	versionsAfter := rm.GetInstalledVersions()
+	if len(versionsAfter) != 1 || versionsAfter[0].Id != "b3900-cpu" || !versionsAfter[0].IsActive {
+		t.Fatalf("Expected 1 active version (b3900-cpu), got %+v", versionsAfter)
+	}
+}

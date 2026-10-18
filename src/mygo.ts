@@ -9,6 +9,7 @@ export interface AppSettings {
   appDataDir: string;
   /** "cuda", "vulkan", "cpu" */
   activeBackend: string;
+  activeVersion?: string;
   defaultModel: string;
 }
 
@@ -82,6 +83,25 @@ export interface HuggingFaceFile {
   sizeFormatted: string;
   downloadUrl: string;
   quant: string;
+}
+
+/** InstalledVersionInfo represents a specific installed build of llama.cpp. */
+export interface InstalledVersionInfo {
+  /** e.g. "b4000-cuda" */
+  id: string;
+  /** e.g. "b4000" */
+  tag: string;
+  /** e.g. "cuda", "vulkan", "cpu", "metal", "rocm" */
+  variant: string;
+  /** e.g. "NVIDIA CUDA (RTX / GTX)" */
+  variantName: string;
+  executablePath: string;
+  sizeBytes: number;
+  /** e.g. "342 MB" */
+  sizeDisplay: string;
+  /** Formatted date string */
+  installedAt: string;
+  isActive: boolean;
 }
 
 /** ModelInfo describes a local GGUF model file. */
@@ -217,6 +237,10 @@ export interface Window {}
 
 /** LlamaService is the bound Go service callable from TypeScript. */
 export const LlamaService = {
+  /** ActivateVersion sets a specific installed version (by ID) as the active/current runtime. */
+  activateVersion(id: string): Promise<void> {
+    return call("LlamaService.ActivateVersion", id);
+  },
   /** AutoDetectMMProj searches for an associated vision projector (mmproj) for a model. */
   autoDetectMMProj(modelPath: string): Promise<string> {
     return call("LlamaService.AutoDetectMMProj", modelPath);
@@ -252,6 +276,10 @@ export const LlamaService = {
   /** GetInstalledBackends returns all available backend variants and their installation/active status. */
   getInstalledBackends(): Promise<BackendVariantInfo[]> {
     return call("LlamaService.GetInstalledBackends");
+  },
+  /** GetInstalledVersions returns all installed llama.cpp versions across all backends. */
+  getInstalledVersions(): Promise<InstalledVersionInfo[]> {
+    return call("LlamaService.GetInstalledVersions");
   },
   /** GetModelConfig retrieves the unique configuration JSON for a specific model file. */
   getModelConfig(modelPath: string): Promise<ServerConfig> {
@@ -374,6 +402,10 @@ export const LlamaService = {
   /** UninstallBackend uninstalls a specific backend variant and cleans up binaries. */
   uninstallBackend(variant: string): Promise<void> {
     return call("LlamaService.UninstallBackend", variant);
+  },
+  /** UninstallVersion uninstalls a specific installed version by ID. */
+  uninstallVersion(id: string): Promise<void> {
+    return call("LlamaService.UninstallVersion", id);
   },
 } as const;
 

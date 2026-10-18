@@ -884,6 +884,30 @@
               </div>
             </div>
 
+            <!-- Installed Versions Manager -->
+            <div class="surface-card" id="card-installed-versions">
+              <div class="surface-header">
+                <div>
+                  <div class="surface-title"><i data-lucide="layers"></i> Installed llama.cpp Versions</div>
+                  <div class="surface-desc">Switch between installed builds (set active/current runtime) or remove any of them.</div>
+                </div>
+                <div style="display: flex; gap: 8px; align-items: center;">
+                  <button class="btn btn-secondary btn-sm" id="btn-refresh-installed-versions">
+                    <i data-lucide="refresh-cw"></i>
+                    <span>Refresh</span>
+                  </button>
+                  <button class="btn btn-danger btn-sm" id="btn-uninstall-all-versions" title="Wipe all installed versions and clean bin folder">
+                    <i data-lucide="trash-2"></i>
+                    <span>Uninstall All</span>
+                  </button>
+                </div>
+              </div>
+
+              <div class="backend-manager-grid" id="installed-versions-list">
+                <!-- Dynamically populated by main.ts -->
+              </div>
+            </div>
+
             <div class="surface-card">
               <div class="surface-header">
                 <div>

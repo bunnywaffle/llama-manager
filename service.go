@@ -24,6 +24,7 @@ type AppSettings struct {
 	ModelsDir     string `json:"modelsDir"`
 	AppDataDir    string `json:"appDataDir"`
 	ActiveBackend string `json:"activeBackend"` // "cuda", "vulkan", "cpu"
+	ActiveVersion string `json:"activeVersion,omitempty"`
 	DefaultModel  string `json:"defaultModel"`
 }
 
@@ -410,6 +411,84 @@ func (s *LlamaService) UninstallAllBackends() error {
 	return nil
 }
 
+// GetInstalledVersions returns all installed llama.cpp versions across all backends.
+func (s *LlamaService) GetInstalledVersions() []InstalledVersionInfo {
+	return s.releaseMgr.GetInstalledVersions()
+}
+
+// ActivateVersion sets a specific installed version (by ID) as the active/current runtime.
+func (s *LlamaService) ActivateVersion(id string) error {
+	_ = s.serverMgr.Stop()
+
+	if err := s.releaseMgr.ActivateVersion(id); err != nil {
+		return err
+	}
+
+	current := s.releaseMgr.GetInstalledBackend()
+	s.mu.Lock()
+	s.settings.ActiveBackend = current.Variant
+	s.settings.ActiveVersion = current.Version
+	_ = s.saveSettingsToFile()
+	win := s.win
+	s.mu.Unlock()
+
+	if win != nil {
+		_ = ServerStatusEvent.Emit(win, s.serverMgr.GetStatus())
+	}
+	return nil
+}
+
+// UninstallVersion uninstalls a specific installed version by ID.
+func (s *LlamaService) UninstallVersion(id string) error {
+	current := s.releaseMgr.GetInstalledBackend()
+	binVersionFile := filepath.Join(s.releaseMgr.binDir, "version.txt")
+	isActive := false
+	if data, err := os.ReadFile(binVersionFile); err == nil {
+		lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+		if len(lines) >= 3 && strings.TrimSpace(lines[2]) == id {
+			isActive = true
+		} else if strings.Contains(id, current.Version) && strings.Contains(id, current.Variant) {
+			isActive = true
+		} else if id == current.Variant {
+			isActive = true
+		}
+	}
+
+	if isActive {
+		_ = s.serverMgr.Stop()
+	}
+
+	if err := s.releaseMgr.UninstallVersion(id); err != nil {
+		return err
+	}
+
+	if isActive {
+		remaining := s.releaseMgr.GetInstalledVersions()
+		if len(remaining) > 0 {
+			_ = s.releaseMgr.ActivateVersion(remaining[0].Id)
+			s.mu.Lock()
+			s.settings.ActiveBackend = remaining[0].Variant
+			s.settings.ActiveVersion = remaining[0].Tag
+			_ = s.saveSettingsToFile()
+			s.mu.Unlock()
+		} else {
+			s.mu.Lock()
+			s.settings.ActiveBackend = ""
+			s.settings.ActiveVersion = ""
+			_ = s.saveSettingsToFile()
+			s.mu.Unlock()
+		}
+	}
+
+	s.mu.Lock()
+	win := s.win
+	s.mu.Unlock()
+	if win != nil {
+		_ = ServerStatusEvent.Emit(win, s.serverMgr.GetStatus())
+	}
+	return nil
+}
+
 // CheckReleases queries GitHub for recent llama.cpp releases.
 func (s *LlamaService) CheckReleases() ([]ReleaseInfo, error) {
 	return s.releaseMgr.CheckReleases()
@@ -417,6 +496,8 @@ func (s *LlamaService) CheckReleases() ([]ReleaseInfo, error) {
 
 // DownloadBackend downloads and installs the selected release tag and variant.
 func (s *LlamaService) DownloadBackend(tag, variant string) error {
+	_ = s.serverMgr.Stop()
+
 	err := s.releaseMgr.DownloadAndInstall(tag, variant, func(p ProgressReport) {
 		s.mu.Lock()
 		win := s.win
@@ -426,10 +507,17 @@ func (s *LlamaService) DownloadBackend(tag, variant string) error {
 		}
 	})
 	if err == nil {
+		current := s.releaseMgr.GetInstalledBackend()
 		s.mu.Lock()
-		s.settings.ActiveBackend = variant
+		s.settings.ActiveBackend = current.Variant
+		s.settings.ActiveVersion = current.Version
 		_ = s.saveSettingsToFile()
+		win := s.win
 		s.mu.Unlock()
+
+		if win != nil {
+			_ = ServerStatusEvent.Emit(win, s.serverMgr.GetStatus())
+		}
 	}
 	return err
 }
