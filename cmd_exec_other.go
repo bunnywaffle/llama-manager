@@ -3,7 +3,11 @@
 package main
 
 import (
+	"fmt"
+	"os"
 	"os/exec"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -31,4 +35,29 @@ func terminateProcessTree(pid int) {
 	time.Sleep(100 * time.Millisecond)
 	// Force kill the process group
 	_ = syscall.Kill(-pid, syscall.SIGKILL)
+}
+
+func killLingeringUnixProcesses() {
+	cmd := prepareCmd(exec.Command("pkill", "-x", "llama-server"))
+	_ = cmd.Run()
+	cmd2 := prepareCmd(exec.Command("killall", "-9", "llama-server"))
+	_ = cmd2.Run()
+
+	// On Linux, scan /proc for any lingering llama-server PID to ensure complete cleanup
+	if entries, err := os.ReadDir("/proc"); err == nil {
+		for _, e := range entries {
+			if !e.IsDir() {
+				continue
+			}
+			pid, pErr := strconv.Atoi(e.Name())
+			if pErr != nil || pid <= 1 {
+				continue
+			}
+			if cmdline, err := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", pid)); err == nil {
+				if strings.Contains(string(cmdline), "llama-server") {
+					_ = syscall.Kill(pid, syscall.SIGKILL)
+				}
+			}
+		}
+	}
 }

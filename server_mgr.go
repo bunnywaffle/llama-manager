@@ -331,6 +331,9 @@ func (sm *ServerManager) Start(cfg ServerConfig) error {
 	}
 	if runtime.GOOS == "darwin" {
 		_ = exec.Command("xattr", "-cr", sm.binDir).Run()
+		if realDir, err := filepath.EvalSymlinks(sm.binDir); err == nil && realDir != sm.binDir {
+			_ = exec.Command("xattr", "-cr", realDir).Run()
+		}
 	}
 
 	if !cfg.RouterMode {
@@ -516,9 +519,31 @@ func (sm *ServerManager) Start(cfg ServerConfig) error {
 	cmd := prepareCmd(exec.Command(serverExe, args...))
 	cmd.Dir = sm.binDir
 
-	// Prepend binDir to PATH, LD_LIBRARY_PATH (Linux), and DYLD_LIBRARY_PATH (macOS)
+	// Prepend binDir and resolved real directory to PATH, LD_LIBRARY_PATH (Linux), and DYLD_LIBRARY_PATH (macOS)
+	var searchDirs []string
+	searchDirs = append(searchDirs, sm.binDir)
+	if realBinDir, err := filepath.EvalSymlinks(sm.binDir); err == nil && realBinDir != "" && realBinDir != sm.binDir {
+		searchDirs = append(searchDirs, realBinDir)
+	}
+
+	if runtime.GOOS == "linux" {
+		linuxDriverPaths := []string{
+			"/usr/local/cuda/lib64",
+			"/usr/lib/wsl/lib",
+			"/usr/lib/x86_64-linux-gnu",
+			"/usr/lib/aarch64-linux-gnu",
+			"/opt/rocm/lib",
+		}
+		for _, p := range linuxDriverPaths {
+			if fi, err := os.Stat(p); err == nil && fi.IsDir() {
+				searchDirs = append(searchDirs, p)
+			}
+		}
+	}
+
 	env := os.Environ()
 	sep := string(os.PathListSeparator)
+	searchPrefix := strings.Join(searchDirs, sep)
 
 	pathUpdated := false
 	ldUpdated := false
@@ -527,26 +552,26 @@ func (sm *ServerManager) Start(cfg ServerConfig) error {
 	for i, e := range env {
 		upper := strings.ToUpper(e)
 		if strings.HasPrefix(upper, "PATH=") {
-			env[i] = fmt.Sprintf("PATH=%s%s%s", sm.binDir, sep, e[5:])
+			env[i] = fmt.Sprintf("PATH=%s%s%s", searchPrefix, sep, e[5:])
 			pathUpdated = true
 		} else if strings.HasPrefix(upper, "LD_LIBRARY_PATH=") {
-			env[i] = fmt.Sprintf("LD_LIBRARY_PATH=%s%s%s", sm.binDir, sep, e[16:])
+			env[i] = fmt.Sprintf("LD_LIBRARY_PATH=%s%s%s", searchPrefix, sep, e[16:])
 			ldUpdated = true
 		} else if strings.HasPrefix(upper, "DYLD_LIBRARY_PATH=") {
-			env[i] = fmt.Sprintf("DYLD_LIBRARY_PATH=%s%s%s", sm.binDir, sep, e[18:])
+			env[i] = fmt.Sprintf("DYLD_LIBRARY_PATH=%s%s%s", searchPrefix, sep, e[18:])
 			dyldUpdated = true
 		}
 	}
 	if !pathUpdated {
-		env = append(env, fmt.Sprintf("PATH=%s", sm.binDir))
+		env = append(env, fmt.Sprintf("PATH=%s", searchPrefix))
 	}
 	if !ldUpdated {
-		env = append(env, fmt.Sprintf("LD_LIBRARY_PATH=%s", sm.binDir))
+		env = append(env, fmt.Sprintf("LD_LIBRARY_PATH=%s", searchPrefix))
 	}
 	if !dyldUpdated {
-		env = append(env, fmt.Sprintf("DYLD_LIBRARY_PATH=%s", sm.binDir))
+		env = append(env, fmt.Sprintf("DYLD_LIBRARY_PATH=%s", searchPrefix))
 	}
-	env = append(env, fmt.Sprintf("DYLD_FALLBACK_LIBRARY_PATH=%s", sm.binDir))
+	env = append(env, fmt.Sprintf("DYLD_FALLBACK_LIBRARY_PATH=%s", searchPrefix))
 	cmd.Env = env
 
 	stdoutPipe, err := cmd.StdoutPipe()
@@ -606,25 +631,49 @@ func (sm *ServerManager) Start(cfg ServerConfig) error {
 
 	sm.addLogLocked(fmt.Sprintf("[System] Started llama-server with model %s on %s:%d", filepath.Base(cfg.ModelPath), cfg.Host, cfg.Port))
 
-	// Release mutex temporarily while awaiting initial health confirmation
+	// Release mutex temporarily while awaiting initial health confirmation or early exit
 	sm.mu.Unlock()
-	select {
-	case err := <-exitChan:
-		sm.mu.Lock()
-		sm.running = false
-		snippet := sm.getLastMeaningfulErrorLocked()
-		if snippet == "" {
-			snippet = sm.getLastErrorSnippetLocked()
-		}
-		return fmt.Errorf("llama-server failed to start (%v). %s", err, snippet)
-	case <-time.After(1200 * time.Millisecond):
-		sm.mu.Lock()
-		if !sm.running {
+
+	healthURL := fmt.Sprintf("http://%s:%d/health", cfg.Host, cfg.Port)
+	healthClient := http.Client{Timeout: 200 * time.Millisecond}
+
+	deadline := time.Now().Add(5 * time.Second)
+	startedSuccessfully := false
+
+	for time.Now().Before(deadline) {
+		select {
+		case err := <-exitChan:
+			sm.mu.Lock()
+			sm.running = false
 			snippet := sm.getLastMeaningfulErrorLocked()
 			if snippet == "" {
-				snippet = sm.lastError
+				snippet = sm.getLastErrorSnippetLocked()
 			}
-			return fmt.Errorf("llama-server failed during startup: %s", snippet)
+			sm.mu.Unlock()
+			return fmt.Errorf("llama-server failed to start (%v). %s", err, snippet)
+		case <-time.After(200 * time.Millisecond):
+			sm.mu.Lock()
+			isRunning := sm.running
+			sm.mu.Unlock()
+			if !isRunning {
+				sm.mu.Lock()
+				snippet := sm.getLastMeaningfulErrorLocked()
+				if snippet == "" {
+					snippet = sm.lastError
+				}
+				sm.mu.Unlock()
+				return fmt.Errorf("llama-server stopped unexpectedly during startup: %s", snippet)
+			}
+
+			// Test health endpoint: HTTP 200 (OK) or 503 (loading model) confirms the server is alive
+			if resp, err := healthClient.Get(healthURL); err == nil {
+				resp.Body.Close()
+				startedSuccessfully = true
+				break
+			}
+		}
+		if startedSuccessfully {
+			break
 		}
 	}
 

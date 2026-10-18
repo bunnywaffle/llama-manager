@@ -170,18 +170,46 @@ func detectHardwareLinux(info *HardwareInfo) {
 		}
 	}
 
-	// 3. Check for AMD ROCm
+	// 3. Check for AMD ROCm: requires /dev/kfd and ROCm toolchain or driver
 	if _, err := os.Stat("/dev/kfd"); err == nil {
-		info.HasROCm = true
-		if !info.HasNvidia {
-			info.GPUName = "AMD Radeon (ROCm)"
-			info.RecommendedBackend = "rocm"
+		hasRocmTool := false
+		if _, err := exec.LookPath("rocm-smi"); err == nil {
+			hasRocmTool = true
+		} else if _, err := os.Stat("/opt/rocm"); err == nil {
+			hasRocmTool = true
 		}
-		info.AvailableBackends = append(info.AvailableBackends, "rocm")
+		if hasRocmTool {
+			info.HasROCm = true
+			if !info.HasNvidia {
+				info.GPUName = "AMD Radeon (ROCm)"
+				info.RecommendedBackend = "rocm"
+			}
+			info.AvailableBackends = append(info.AvailableBackends, "rocm")
+		}
 	}
 
-	// 4. Check for Vulkan
-	if _, err := os.Stat("/dev/dri"); err == nil {
+	// 4. Check for Vulkan: requires both DRI device and a verified Vulkan driver/loader
+	vulkanLoaderFound := false
+	vulkanCandidates := []string{
+		"/usr/lib64/libvulkan.so.1",
+		"/usr/lib/x86_64-linux-gnu/libvulkan.so.1",
+		"/usr/lib/aarch64-linux-gnu/libvulkan.so.1",
+		"/usr/lib/libvulkan.so.1",
+		"/usr/local/lib/libvulkan.so.1",
+	}
+	for _, p := range vulkanCandidates {
+		if _, err := os.Stat(p); err == nil {
+			vulkanLoaderFound = true
+			break
+		}
+	}
+	if !vulkanLoaderFound {
+		if _, err := exec.LookPath("vulkaninfo"); err == nil {
+			vulkanLoaderFound = true
+		}
+	}
+
+	if _, err := os.Stat("/dev/dri"); err == nil && vulkanLoaderFound {
 		info.HasVulkan = true
 		info.AvailableBackends = append(info.AvailableBackends, "vulkan")
 		if info.RecommendedBackend == "cpu" {

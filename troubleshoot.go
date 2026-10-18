@@ -250,6 +250,9 @@ func RunDiagnostics(binDir, modelsDir, variant string, port int, hw HardwareInfo
 		}
 		if runtime.GOOS == "darwin" {
 			_ = exec.Command("xattr", "-cr", binDir).Run()
+			if realDir, err := filepath.EvalSymlinks(binDir); err == nil && realDir != binDir {
+				_ = exec.Command("xattr", "-cr", realDir).Run()
+			}
 		}
 
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -258,32 +261,55 @@ func RunDiagnostics(binDir, modelsDir, variant string, port int, hw HardwareInfo
 		cmd := prepareCmd(exec.CommandContext(ctx, exePath, "--help"))
 		cmd.Dir = binDir
 
+		var searchDirs []string
+		searchDirs = append(searchDirs, binDir)
+		if realBinDir, err := filepath.EvalSymlinks(binDir); err == nil && realBinDir != "" && realBinDir != binDir {
+			searchDirs = append(searchDirs, realBinDir)
+		}
+
+		if runtime.GOOS == "linux" {
+			linuxDriverPaths := []string{
+				"/usr/local/cuda/lib64",
+				"/usr/lib/wsl/lib",
+				"/usr/lib/x86_64-linux-gnu",
+				"/usr/lib/aarch64-linux-gnu",
+				"/opt/rocm/lib",
+			}
+			for _, p := range linuxDriverPaths {
+				if fi, err := os.Stat(p); err == nil && fi.IsDir() {
+					searchDirs = append(searchDirs, p)
+				}
+			}
+		}
+
 		env := os.Environ()
 		sep := string(os.PathListSeparator)
+		searchPrefix := strings.Join(searchDirs, sep)
+
 		pathUpdated, ldUpdated, dyldUpdated := false, false, false
 		for i, e := range env {
 			upper := strings.ToUpper(e)
 			if strings.HasPrefix(upper, "PATH=") {
-				env[i] = fmt.Sprintf("PATH=%s%s%s", binDir, sep, e[5:])
+				env[i] = fmt.Sprintf("PATH=%s%s%s", searchPrefix, sep, e[5:])
 				pathUpdated = true
 			} else if strings.HasPrefix(upper, "LD_LIBRARY_PATH=") {
-				env[i] = fmt.Sprintf("LD_LIBRARY_PATH=%s%s%s", binDir, sep, e[16:])
+				env[i] = fmt.Sprintf("LD_LIBRARY_PATH=%s%s%s", searchPrefix, sep, e[16:])
 				ldUpdated = true
 			} else if strings.HasPrefix(upper, "DYLD_LIBRARY_PATH=") {
-				env[i] = fmt.Sprintf("DYLD_LIBRARY_PATH=%s%s%s", binDir, sep, e[18:])
+				env[i] = fmt.Sprintf("DYLD_LIBRARY_PATH=%s%s%s", searchPrefix, sep, e[18:])
 				dyldUpdated = true
 			}
 		}
 		if !pathUpdated {
-			env = append(env, fmt.Sprintf("PATH=%s", binDir))
+			env = append(env, fmt.Sprintf("PATH=%s", searchPrefix))
 		}
 		if !ldUpdated {
-			env = append(env, fmt.Sprintf("LD_LIBRARY_PATH=%s", binDir))
+			env = append(env, fmt.Sprintf("LD_LIBRARY_PATH=%s", searchPrefix))
 		}
 		if !dyldUpdated {
-			env = append(env, fmt.Sprintf("DYLD_LIBRARY_PATH=%s", binDir))
+			env = append(env, fmt.Sprintf("DYLD_LIBRARY_PATH=%s", searchPrefix))
 		}
-		env = append(env, fmt.Sprintf("DYLD_FALLBACK_LIBRARY_PATH=%s", binDir))
+		env = append(env, fmt.Sprintf("DYLD_FALLBACK_LIBRARY_PATH=%s", searchPrefix))
 		cmd.Env = env
 
 		out, err := cmd.CombinedOutput()
@@ -296,11 +322,41 @@ func RunDiagnostics(binDir, modelsDir, variant string, port int, hw HardwareInfo
 				FixAction: "kill_zombies",
 			})
 		} else if err != nil && !strings.Contains(string(out), "usage:") && !strings.Contains(string(out), "options:") {
+			detailedMsg := fmt.Sprintf("Failed to launch binary: %v. Output: %s", err, strings.TrimSpace(string(out)))
+			if runtime.GOOS == "linux" {
+				if lddCmd := prepareCmd(exec.Command("ldd", exePath)); lddCmd != nil {
+					lddCmd.Env = env
+					if lddOut, lddErr := lddCmd.CombinedOutput(); lddErr == nil {
+						var missingLibs []string
+						for _, lddLine := range strings.Split(string(lddOut), "\n") {
+							if strings.Contains(lddLine, "not found") {
+								parts := strings.Split(lddLine, "=>")
+								if len(parts) > 0 {
+									missingLibs = append(missingLibs, strings.TrimSpace(parts[0]))
+								} else {
+									missingLibs = append(missingLibs, strings.TrimSpace(lddLine))
+								}
+							}
+						}
+						if len(missingLibs) > 0 {
+							detailedMsg = fmt.Sprintf("Missing Linux shared libraries (%s). Run 'sudo apt install' or your distro package manager to install them, or switch to CPU backend.", strings.Join(missingLibs, ", "))
+						}
+					}
+				}
+			} else if runtime.GOOS == "darwin" {
+				if otoolCmd := prepareCmd(exec.Command("otool", "-L", exePath)); otoolCmd != nil {
+					if otoolOut, otoolErr := otoolCmd.CombinedOutput(); otoolErr == nil {
+						if strings.Contains(string(otoolOut), "libllama") {
+							detailedMsg = fmt.Sprintf("macOS dyld failed to load adjacent libraries. Ensure all .dylib companion files are unpacked alongside llama-server in %s: %s", binDir, strings.TrimSpace(string(out)))
+						}
+					}
+				}
+			}
 			report.Items = append(report.Items, DiagnosticItem{
 				Category:  "smoke_test",
 				Title:     "Binary Execution Smoke Test",
 				Status:    "error",
-				Message:   fmt.Sprintf("Failed to launch binary: %v. Output: %s", err, strings.TrimSpace(string(out))),
+				Message:   detailedMsg,
 				FixAction: "reinstall",
 			})
 		} else {
@@ -429,10 +485,7 @@ func KillZombieProcesses() error {
 		_ = cmd.Run()
 		time.Sleep(150 * time.Millisecond)
 	} else {
-		cmd := prepareCmd(exec.Command("pkill", "-x", "llama-server"))
-		_ = cmd.Run()
-		cmd2 := prepareCmd(exec.Command("killall", "-9", "llama-server"))
-		_ = cmd2.Run()
+		killLingeringUnixProcesses()
 		time.Sleep(50 * time.Millisecond)
 	}
 	return nil

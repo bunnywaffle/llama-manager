@@ -30,3 +30,7 @@ func terminateProcessTree(pid int) {
 	killCmd := prepareCmd(exec.Command("taskkill", "/PID", strconv.Itoa(pid), "/T", "/F"))
 	_ = killCmd.Run()
 }
+
+func killLingeringUnixProcesses() {
+	// No-op on Windows: taskkill handles all process trees
+}

@@ -40,8 +40,8 @@ func defaultBackendForHost() string {
 // isAssetCompatibleWithHost ensures only releases built for the detected OS and architecture are downloaded.
 func isAssetCompatibleWithHost(assetName string) bool {
 	name := strings.ToLower(assetName)
-	// Never treat framework/installer artifacts as server backends.
-	if strings.Contains(name, "xcframework") || strings.HasSuffix(name, ".dmg") {
+	// Never treat framework/installer/android artifacts as server backends.
+	if strings.Contains(name, "xcframework") || strings.HasSuffix(name, ".dmg") || strings.Contains(name, "android") {
 		return false
 	}
 	switch runtime.GOOS {
@@ -61,7 +61,7 @@ func isAssetCompatibleWithHost(assetName string) bool {
 		if !strings.Contains(name, "ubuntu") && !strings.Contains(name, "linux") {
 			return false
 		}
-		if strings.Contains(name, "s390x") {
+		if strings.Contains(name, "s390x") || strings.Contains(name, "snapdragon") {
 			return false
 		}
 		if runtime.GOARCH == "arm64" {
@@ -146,19 +146,37 @@ func scorePrimaryAsset(lower, variant string) int {
 			return -1
 		}
 		score := 10
-		// Prefer newer CUDA toolkits when several are published.
-		for _, v := range []string{"13.4", "12.8", "12.4", "12.2", "11.8"} {
+		// Prefer newer CUDA toolkits when several are published with descending weights.
+		cudaScores := map[string]int{
+			"13.4": 25,
+			"13.0": 24,
+			"12.8": 20,
+			"12.6": 18,
+			"12.4": 16,
+			"12.2": 14,
+			"11.8": 10,
+		}
+		bonus := 0
+		for ver, pts := range cudaScores {
+			if strings.Contains(lower, ver) {
+				if pts > bonus {
+					bonus = pts
+				}
+			}
+		}
+		return score + bonus
+	case "rocm":
+		if !strings.Contains(lower, "rocm") {
+			return -1
+		}
+		score := 10
+		for _, v := range []string{"10.0", "6.2", "6.1", "6.0", "5.7"} {
 			if strings.Contains(lower, v) {
 				score += 5
 				break
 			}
 		}
 		return score
-	case "rocm":
-		if !strings.Contains(lower, "rocm") {
-			return -1
-		}
-		return 10
 	case "vulkan":
 		if !strings.Contains(lower, "vulkan") {
 			return -1
@@ -685,6 +703,9 @@ func linkOrMirrorDir(targetDir, linkDir string) error {
 		if err := os.Symlink(targetDir, linkDir); err == nil {
 			if runtime.GOOS == "darwin" {
 				_ = exec.Command("xattr", "-cr", linkDir).Run()
+				if realTarget, rErr := filepath.EvalSymlinks(linkDir); rErr == nil && realTarget != linkDir {
+					_ = exec.Command("xattr", "-cr", realTarget).Run()
+				}
 			}
 			return nil
 		}
@@ -754,6 +775,9 @@ func (rm *ReleaseManager) ActivateVersion(id string) error {
 	}
 	if runtime.GOOS == "darwin" {
 		_ = exec.Command("xattr", "-cr", targetDir).Run()
+		if realT, err := filepath.EvalSymlinks(targetDir); err == nil && realT != targetDir {
+			_ = exec.Command("xattr", "-cr", realT).Run()
+		}
 	}
 
 	tag := ""
@@ -1131,6 +1155,9 @@ func (rm *ReleaseManager) DownloadAndInstall(tag, variant string, onProgress fun
 	}
 	if runtime.GOOS == "darwin" {
 		_ = exec.Command("xattr", "-cr", targetDir).Run()
+		if realT, err := filepath.EvalSymlinks(targetDir); err == nil && realT != targetDir {
+			_ = exec.Command("xattr", "-cr", realT).Run()
+		}
 	}
 
 	// Write version tag, variant, and versionId in targetDir

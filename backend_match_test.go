@@ -99,3 +99,30 @@ func TestDefaultBackendForHost(t *testing.T) {
 		}
 	}
 }
+
+
+
+func TestCudaWeightedScoringReal(t *testing.T) {
+	s134 := scorePrimaryAsset("llama-b11718-bin-win-cuda-13.4-x64.zip", "cuda")
+	s128 := scorePrimaryAsset("llama-b11718-bin-win-cuda-12.8-x64.zip", "cuda")
+	s124 := scorePrimaryAsset("llama-b11718-bin-win-cuda-12.4-x64.zip", "cuda")
+	s118 := scorePrimaryAsset("llama-b11718-bin-win-cuda-11.8-x64.zip", "cuda")
+
+	if !(s134 > s128 && s128 > s124 && s124 > s118) {
+		t.Errorf("expected descending CUDA scores: 13.4 (%d) > 12.8 (%d) > 12.4 (%d) > 11.8 (%d)", s134, s128, s124, s118)
+	}
+}
+
+func TestHostFilterExcludesAndroidAndSnapdragon(t *testing.T) {
+	rejected := []string{
+		"llama-b11718-bin-android-arm64.tar.gz",
+		"llama-b11718-bin-android-arm64-snapdragon.tar.gz",
+		"llama-b11718-bin-linux-arm64-snapdragon.tar.gz",
+		"llama-b11718-xcframework.zip",
+	}
+	for _, a := range rejected {
+		if isAssetCompatibleWithHost(a) {
+			t.Errorf("isAssetCompatibleWithHost(%q) = true, want false", a)
+		}
+	}
+}
