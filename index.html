@@ -808,6 +808,12 @@
                       <select class="persona-select" id="chat-persona-select">
                         <!-- Rendered dynamically -->
                       </select>
+                      <button class="btn btn-secondary btn-sm btn-icon" id="btn-edit-persona" title="Edit selected persona">
+                        <i data-lucide="edit-2"></i>
+                      </button>
+                      <button class="btn btn-secondary btn-sm btn-icon" id="btn-delete-persona" title="Delete custom persona" style="display: none;">
+                        <i data-lucide="trash-2"></i>
+                      </button>
                       <button class="btn btn-secondary btn-sm" id="btn-new-persona" title="Create custom persona system prompt">
                         <i data-lucide="plus"></i>
                         <span>Persona</span>
@@ -1054,7 +1060,7 @@
       <div class="modal-dialog">
         <div class="modal-header">
           <div class="modal-title">
-            <span>Create Custom Persona</span>
+            <span id="persona-modal-title">Create Custom Persona</span>
           </div>
           <button class="btn btn-secondary btn-sm" id="btn-close-persona-modal" style="padding: 2px 6px;">
             <i data-lucide="x"></i>
@@ -1078,7 +1084,7 @@
           <button class="btn btn-secondary" id="btn-cancel-persona">Cancel</button>
           <button class="btn btn-primary" id="btn-save-persona">
             <i data-lucide="check"></i>
-            <span>Save Persona</span>
+            <span id="persona-modal-submit-text">Save Persona</span>
           </button>
         </div>
       </div>

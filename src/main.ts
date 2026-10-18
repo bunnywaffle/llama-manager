@@ -60,6 +60,7 @@ import {
   type Persona,
   getPersonas,
   saveCustomPersona,
+  deleteCustomPersona,
   getPersonaById,
   loadAllSessions,
   saveSession,
@@ -2243,6 +2244,8 @@ function setupChat() {
   const btnNewThread = $("#btn-new-thread");
   const btnClearChat = $("#btn-clear-chat");
   const btnNewPersona = $("#btn-new-persona");
+  const btnEditPersona = $("#btn-edit-persona");
+  const btnDeletePersona = $("#btn-delete-persona");
   const modalPersona = $("#modal-persona");
   const btnCloseModal = $("#btn-close-persona-modal");
   const btnCancelPersona = $("#btn-cancel-persona");
@@ -2334,6 +2337,20 @@ function setupChat() {
     }
   }
 
+  let editingPersonaId: string | null = null;
+
+  // Update persona actions toolbar state (edit/delete buttons)
+  function updatePersonaButtonsState() {
+    const selectedId = personaSelect.value;
+    const current = getPersonaById(selectedId);
+    if (btnDeletePersona) {
+      btnDeletePersona.style.display = current.isCustom ? "inline-flex" : "none";
+    }
+    if (btnEditPersona) {
+      btnEditPersona.title = current.isCustom ? `Edit Persona: ${current.name}` : `Customize ${current.name}`;
+    }
+  }
+
   // Populate persona selector
   function renderPersonaOptions() {
     personaSelect.innerHTML = "";
@@ -2345,11 +2362,14 @@ function setupChat() {
       personaSelect.appendChild(opt);
     });
     personaSelect.value = currentSession.personaId || "default";
+    updatePersonaButtonsState();
+    renderIcons();
   }
 
   personaSelect.addEventListener("change", () => {
     currentSession.personaId = personaSelect.value;
     saveSession(currentSession);
+    updatePersonaButtonsState();
   });
 
   reasoningSelect?.addEventListener("change", () => {
@@ -2357,19 +2377,60 @@ function setupChat() {
     saveSession(currentSession);
   });
 
-  // Modal handlers
-  function openPersonaModal() {
-    $<HTMLInputElement>("#persona-name-input").value = "";
-    $<HTMLInputElement>("#persona-desc-input").value = "";
-    $<HTMLTextAreaElement>("#persona-prompt-input").value = "";
+  // Modal handlers for create / edit
+  function openPersonaModal(existing?: Persona) {
+    const modalTitle = $<HTMLElement>("#persona-modal-title");
+    const submitText = $<HTMLElement>("#persona-modal-submit-text");
+
+    if (existing) {
+      editingPersonaId = existing.isCustom ? existing.id : null;
+      if (modalTitle) modalTitle.textContent = existing.isCustom ? `Edit Persona: ${existing.name}` : `Customize ${existing.name}`;
+      if (submitText) submitText.textContent = existing.isCustom ? "Update Persona" : "Save as Persona";
+      $<HTMLInputElement>("#persona-name-input").value = existing.isCustom ? existing.name : `${existing.name} (Custom)`;
+      $<HTMLInputElement>("#persona-desc-input").value = existing.tagline || "";
+      $<HTMLTextAreaElement>("#persona-prompt-input").value = existing.systemPrompt || "";
+    } else {
+      editingPersonaId = null;
+      if (modalTitle) modalTitle.textContent = "Create Custom Persona";
+      if (submitText) submitText.textContent = "Save Persona";
+      $<HTMLInputElement>("#persona-name-input").value = "";
+      $<HTMLInputElement>("#persona-desc-input").value = "";
+      $<HTMLTextAreaElement>("#persona-prompt-input").value = "";
+    }
     modalPersona.classList.add("open");
+    setTimeout(() => $<HTMLInputElement>("#persona-name-input").focus(), 50);
   }
 
   function closePersonaModal() {
     modalPersona.classList.remove("open");
+    editingPersonaId = null;
   }
 
-  btnNewPersona.addEventListener("click", openPersonaModal);
+  btnNewPersona.addEventListener("click", () => openPersonaModal());
+  btnEditPersona?.addEventListener("click", () => {
+    const selectedId = personaSelect.value;
+    const current = getPersonaById(selectedId);
+    openPersonaModal(current);
+  });
+  btnDeletePersona?.addEventListener("click", async () => {
+    const selectedId = personaSelect.value;
+    const current = getPersonaById(selectedId);
+    if (!current.isCustom) return;
+    const ok = await showConfirm(
+      "Delete Persona",
+      `Are you sure you want to delete the custom persona "${current.name}"?`,
+      "Delete Persona",
+      true
+    );
+    if (ok) {
+      deleteCustomPersona(selectedId);
+      currentSession.personaId = "default";
+      saveSession(currentSession);
+      renderPersonaOptions();
+      showToast(`Deleted custom persona "${current.name}".`, "info", "Persona Deleted");
+    }
+  });
+
   btnCloseModal.addEventListener("click", closePersonaModal);
   btnCancelPersona.addEventListener("click", closePersonaModal);
 
@@ -2383,20 +2444,25 @@ function setupChat() {
       return;
     }
 
-    const newPersona: Persona = {
-      id: "persona_" + Date.now(),
+    const isEdit = !!editingPersonaId;
+    const personaId = editingPersonaId || ("persona_" + Date.now());
+
+    const savedPersona: Persona = {
+      id: personaId,
       name,
       tagline: tagline || "Custom Assistant Persona",
       systemPrompt,
       isCustom: true,
     };
 
-    saveCustomPersona(newPersona);
+    saveCustomPersona(savedPersona);
     renderPersonaOptions();
-    personaSelect.value = newPersona.id;
-    currentSession.personaId = newPersona.id;
+    personaSelect.value = savedPersona.id;
+    currentSession.personaId = savedPersona.id;
     saveSession(currentSession);
+    updatePersonaButtonsState();
     closePersonaModal();
+    showToast(isEdit ? `Updated persona "${name}"` : `Created persona "${name}"`, "success", isEdit ? "Persona Updated" : "Persona Created");
   });
 
   // Render session list
