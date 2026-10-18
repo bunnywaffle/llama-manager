@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
@@ -587,6 +588,9 @@ func (sm *ServerManager) Start(cfg ServerConfig) error {
 		return fmt.Errorf("failed to start llama-server: %w", err)
 	}
 
+	// Register with OS kernel job object / process tree tracking so child is terminated when app closes
+	assignProcessToJob(cmd.Process)
+
 	sm.cmd = cmd
 	sm.running = true
 	sm.startTime = time.Now()
@@ -699,6 +703,10 @@ func (sm *ServerManager) Stop() error {
 
 	// Clean up any lingering zombie child processes
 	_ = KillZombieProcesses()
+
+	// Release unused memory pages and process working set back to OS
+	trimProcessWorkingSet()
+	debug.FreeOSMemory()
 
 	// Wait briefly for OS to flush and release process file locks
 	time.Sleep(200 * time.Millisecond)
@@ -839,7 +847,9 @@ func (sm *ServerManager) streamLogs(reader io.Reader) {
 
 func (sm *ServerManager) addLogLocked(line string) {
 	if len(sm.logBuffer) >= sm.maxLogs {
-		sm.logBuffer = sm.logBuffer[1:]
+		trimmed := make([]string, sm.maxLogs-1, sm.maxLogs)
+		copy(trimmed, sm.logBuffer[len(sm.logBuffer)-(sm.maxLogs-1):])
+		sm.logBuffer = trimmed
 	}
 	sm.logBuffer = append(sm.logBuffer, line)
 	cb := sm.logCallback

@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"sync"
@@ -1011,6 +1012,8 @@ func (rm *ReleaseManager) DownloadAndInstall(tag, variant string, onProgress fun
 		rm.isBusy = false
 		rm.cancelChan = nil
 		rm.mu.Unlock()
+		debug.FreeOSMemory()
+		trimProcessWorkingSet()
 	}()
 
 	// Query releases to find exact assets

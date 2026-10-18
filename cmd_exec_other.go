@@ -25,6 +25,14 @@ func prepareCmd(cmd *exec.Cmd) *exec.Cmd {
 	return cmd
 }
 
+// assignProcessToJob is a no-op on Unix platforms as process group PGID handles containment.
+func assignProcessToJob(p *os.Process) {
+}
+
+// trimProcessWorkingSet is a no-op on Unix as Go runtime FreeOSMemory handles madvise.
+func trimProcessWorkingSet() {
+}
+
 // terminateProcessTree terminates a process and all its child processes in its process group on Unix.
 func terminateProcessTree(pid int) {
 	if pid <= 0 {

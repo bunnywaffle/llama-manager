@@ -3,7 +3,10 @@ package main
 import (
 	"log"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"runtime/debug"
+	"syscall"
 	"time"
 
 	"github.com/egoist/mygo"
@@ -41,11 +44,16 @@ func getAppDataDir() string {
 }
 
 func main() {
+	// Minimize Go runtime memory overhead: trigger GC when heap grows by 30% (default is 100%)
+	debug.SetGCPercent(30)
+	debug.FreeOSMemory()
+	trimProcessWorkingSet()
+
 	appDataDir := getAppDataDir()
 	svc := NewLlamaService(appDataDir)
 	mygo.Bind(svc)
 
-	// Clean up any lingering background servers and processes on app exit
+	// Clean up any lingering background servers and child processes on app exit
 	mygo.App.OnBeforeQuit(func(e *mygo.QuitEvent) {
 		_ = svc.StopServer()
 		_ = KillZombieProcesses()
@@ -53,7 +61,32 @@ func main() {
 	mygo.App.OnWindowAllClosed(func() {
 		_ = svc.StopServer()
 		_ = KillZombieProcesses()
+		mygo.App.Quit()
 	})
+	mygo.App.OnQuit(func() {
+		_ = svc.StopServer()
+		_ = KillZombieProcesses()
+	})
+
+	// Intercept OS termination signals (SIGINT, SIGTERM) to guarantee nothing is left open
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-sigChan
+		_ = svc.StopServer()
+		_ = KillZombieProcesses()
+		os.Exit(0)
+	}()
+
+	// Periodic background memory trim: release unused virtual memory pages back to operating system
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			debug.FreeOSMemory()
+			trimProcessWorkingSet()
+		}
+	}()
 
 	mygo.App.WhenReady(func() {
 		win := mygo.NewWindow(mygo.WindowOptions{

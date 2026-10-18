@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -406,6 +407,8 @@ func (mm *ModelManager) DownloadModel(url, filename string, onProgress func(Prog
 		mm.isBusy = false
 		mm.cancelChan = nil
 		mm.mu.Unlock()
+		debug.FreeOSMemory()
+		trimProcessWorkingSet()
 	}()
 
 	cleanFilename := filepath.Base(filename)
