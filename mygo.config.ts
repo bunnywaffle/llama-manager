@@ -4,6 +4,7 @@ export default defineConfig({
   name: "llama-manager",
   identifier: "com.example.llamamanager",
   version: "0.1.0",
+  icon: "resources/icon.png",
   // `mygo dev` runs devCommand and loads devUrl; `mygo build` runs
   // buildCommand and embeds frontendDist into the app.
   devUrl: "http://localhost:5173",
