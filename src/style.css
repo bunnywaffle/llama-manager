@@ -1614,7 +1614,7 @@ table.data-table tr:hover td {
   background: var(--bg-surface);
   border: 1px solid var(--border-default);
   border-radius: 10px;
-  padding: 8px 10px 8px 14px;
+  padding: 8px 10px;
   gap: 8px;
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
@@ -1689,7 +1689,17 @@ table.data-table tr:hover td {
 }
 
 .chat-attach-btn:hover {
+  color: var(--text-high);
+  background: var(--bg-hover);
+  transform: scale(1.05);
+}
+
+.chat-attach-btn.vision-active {
   color: #10b981;
+}
+
+.chat-attach-btn.vision-active:hover {
+  color: #059669;
   background: rgba(16, 185, 129, 0.12);
   transform: scale(1.05);
 }
@@ -1699,8 +1709,8 @@ table.data-table tr:hover td {
 }
 
 .chat-attach-btn svg {
-  width: 16px;
-  height: 16px;
+  width: 17px;
+  height: 17px;
   stroke-width: 1.8;
 }
 

@@ -39,6 +39,10 @@ import {
   Boxes,
   Settings2,
   Brain,
+  Image,
+  Paperclip,
+  Eye,
+  FileJson,
 } from "lucide";
 import { marked } from "marked";
 import hljs from "highlight.js";
@@ -118,6 +122,10 @@ function renderIcons() {
       Boxes,
       Settings2,
       Brain,
+      Image,
+      Paperclip,
+      Eye,
+      FileJson,
     },
   });
 }
@@ -285,7 +293,11 @@ function updateVisionUI() {
   const chatInput = document.querySelector<HTMLTextAreaElement>("#chat-input");
 
   if (attachBtn) {
-    attachBtn.style.display = active ? "inline-flex" : "none";
+    attachBtn.style.display = "inline-flex";
+    attachBtn.classList.toggle("vision-active", active);
+    attachBtn.title = active
+      ? "Attach Image (Vision Active)"
+      : "Attach Image (Vision adaptor required)";
   }
   if (visionBadge) {
     visionBadge.style.display = active ? "inline-flex" : "none";
