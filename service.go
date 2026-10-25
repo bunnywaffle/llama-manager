@@ -14,11 +14,21 @@ import (
 	"github.com/egoist/mygo"
 )
 
+// ChatStreamChunk represents an incremental chat completion token or completion state.
+type ChatStreamChunk struct {
+	SessionID string `json:"sessionId"`
+	Content   string `json:"content"`
+	Reasoning string `json:"reasoning"`
+	Done      bool   `json:"done"`
+	Error     string `json:"error,omitempty"`
+}
+
 // Typed events emitted to the frontend
 var (
 	ServerLogEvent        = mygo.NewEvent[string]("server_log")
 	DownloadProgressEvent = mygo.NewEvent[ProgressReport]("download_progress")
 	ServerStatusEvent     = mygo.NewEvent[ServerStatus]("server_status")
+	ChatChunkEvent        = mygo.NewEvent[ChatStreamChunk]("chat_chunk")
 )
 
 type AppSettings struct {
@@ -723,6 +733,31 @@ func (s *LlamaService) SendChat(messages []ChatMessage, temperature float64, rea
 // SendChatWithModel proxies chat messages to llama-server with an optional model name (for Router Mode) and reasoning effort.
 func (s *LlamaService) SendChatWithModel(model string, messages []ChatMessage, temperature float64, reasoningEffort string) (string, error) {
 	return s.serverMgr.SendChatMessageWithModel(model, messages, temperature, reasoningEffort)
+}
+
+// StreamChat streams tokens from the running llama-server directly via Go to the frontend.
+// This completely eliminates WebKitGTK/WKWebView mixed-content and CORS blocking across Linux and macOS.
+func (s *LlamaService) StreamChat(sessionId string, model string, messages []ChatMessage, temperature float64, reasoningEffort string) error {
+	s.mu.Lock()
+	win := s.win
+	s.mu.Unlock()
+
+	go func() {
+		err := s.serverMgr.StreamChatMessage(win, sessionId, model, messages, temperature, reasoningEffort)
+		if err != nil && win != nil {
+			_ = ChatChunkEvent.Emit(win, ChatStreamChunk{
+				SessionID: sessionId,
+				Done:      true,
+				Error:     err.Error(),
+			})
+		}
+	}()
+	return nil
+}
+
+// StopChatStream cancels an ongoing streaming chat request for the given session.
+func (s *LlamaService) StopChatStream(sessionId string) error {
+	return s.serverMgr.StopChatStream(sessionId)
 }
 
 // RunDiagnostics performs a comprehensive health scan of the backend and environment.

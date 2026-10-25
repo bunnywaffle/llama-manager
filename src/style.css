@@ -1673,6 +1673,15 @@ table.data-table tr:hover td {
   transform: scale(0.96);
 }
 
+.chat-send-btn.chat-stop-btn {
+  background: #ef4444 !important;
+  color: #ffffff !important;
+}
+
+.chat-send-btn.chat-stop-btn:hover {
+  background: #dc2626 !important;
+}
+
 .chat-attach-btn {
   background: transparent;
   color: var(--text-medium);

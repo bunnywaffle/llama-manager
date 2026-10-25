@@ -2915,15 +2915,102 @@ function setupChat() {
     await triggerAssistantGeneration();
   }
 
+  // Active streaming state tracking
+  let activeStreamingSessionId = "";
+  let activeReasoningText = "";
+  let activeContentText = "";
+
+  function setGeneratingState(generating: boolean) {
+    const sendBtn = document.querySelector<HTMLButtonElement>("#btn-chat-send");
+    if (!sendBtn) return;
+    if (generating) {
+      sendBtn.innerHTML = `<i data-lucide="square" style="width: 14px; height: 14px; fill: currentColor;"></i>`;
+      sendBtn.title = "Stop generation";
+      sendBtn.classList.add("chat-stop-btn");
+      sendBtn.disabled = false;
+    } else {
+      sendBtn.innerHTML = `<i data-lucide="send"></i>`;
+      sendBtn.title = "Send message";
+      sendBtn.classList.remove("chat-stop-btn");
+      sendBtn.disabled = false;
+    }
+    renderIcons();
+  }
+
+  // Subscribe to Go-driven chat stream events (100% OS-agnostic across Linux, macOS, and Windows)
+  events.chatChunk.on((chunk) => {
+    const session = sessions.find((s) => s.id === chunk.sessionId) || currentSession;
+    const isCurrent = session.id === currentSession.id;
+
+    const path = getActiveConversationPath(session);
+    const last = path[path.length - 1];
+
+    if (chunk.error) {
+      if (last && last.role === "assistant") {
+        last.content = `Error: ${chunk.error}`;
+        saveSession(session);
+        if (isCurrent) renderStage();
+      }
+      if (isCurrent) setGeneratingState(false);
+      activeStreamingSessionId = "";
+      return;
+    }
+
+    if (chunk.reasoning) {
+      activeReasoningText += chunk.reasoning;
+    }
+    if (chunk.content) {
+      activeContentText += chunk.content;
+    }
+
+    let fullText = activeContentText;
+    if (activeReasoningText && !activeContentText.includes("<think>")) {
+      fullText = `<think>\n${activeReasoningText}\n</think>\n${activeContentText}`;
+    }
+
+    if (last && last.role === "assistant") {
+      last.content = fullText;
+      if (isCurrent) {
+        const bubbleEl = document.querySelector<HTMLElement>(`#chat-node-${last.id} .chat-entry`);
+        if (bubbleEl) {
+          renderBubbleContent(bubbleEl, fullText, true);
+        }
+        container.scrollTop = container.scrollHeight;
+      }
+    }
+
+    if (chunk.done) {
+      if (last && last.role === "assistant") {
+        last.content = fullText;
+        saveSession(session);
+        if (isCurrent) {
+          renderSessions();
+          renderStage();
+          setGeneratingState(false);
+        }
+      }
+      activeStreamingSessionId = "";
+    }
+  });
+
+  // Stop button handler if clicked while streaming
+  const chatSendBtn = document.querySelector<HTMLButtonElement>("#btn-chat-send");
+  chatSendBtn?.addEventListener("click", async (e) => {
+    if (activeStreamingSessionId) {
+      e.preventDefault();
+      e.stopPropagation();
+      await LlamaService.stopChatStream(activeStreamingSessionId);
+      setGeneratingState(false);
+      activeStreamingSessionId = "";
+    }
+  });
+
   // Trigger inference generation for the current active branch with live streaming
   async function triggerAssistantGeneration() {
     if (!isServerRunning) {
       showToast("Start the server on the Overview tab before testing in the playground.", "warning", "Server Stopped");
       return;
     }
-
-    const sendBtn = document.querySelector<HTMLButtonElement>("#btn-chat-send");
-    if (sendBtn) sendBtn.disabled = true;
 
     const path = getActiveConversationPath(currentSession);
     let activeNode = path.length > 0 ? path[path.length - 1] : undefined;
@@ -2978,132 +3065,25 @@ function setupChat() {
       const modelArg = routerCheck && routerCheck.checked && routerSelect && routerSelect.value ? routerSelect.value : "";
       const reasoningEffort = reasoningSelect ? reasoningSelect.value : (currentSession.reasoningEffort || "default");
 
-      // Build payload for llama-server
-      const reqBody: any = {
-        messages: messagesToSend,
-        temperature: tempVal,
-        stream: true,
-      };
-      if (modelArg) {
-        reqBody.model = modelArg;
-      }
-      if (reasoningEffort && reasoningEffort !== "default" && reasoningEffort !== "auto") {
-        if (reasoningEffort === "off" || reasoningEffort === "none") {
-          reqBody.chat_template_kwargs = { enable_thinking: false };
-        } else {
-          reqBody.reasoning_effort = reasoningEffort;
-          reqBody.chat_template_kwargs = { reasoning_effort: reasoningEffort };
-        }
-      }
+      activeStreamingSessionId = currentSession.id;
+      activeReasoningText = "";
+      activeContentText = "";
+      setGeneratingState(true);
 
-      const fetchHost = (!currentServerHost || currentServerHost === "0.0.0.0") ? "127.0.0.1" : currentServerHost;
-      const streamUrl = `http://${fetchHost}:${currentServerPort}/v1/chat/completions`;
-
-      let streamedSuccessfully = false;
-      let reasoningAccumulated = "";
-      let contentAccumulated = "";
-      let accumulatedText = "";
-
-      try {
-        const resp = await fetch(streamUrl, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify(reqBody),
-        });
-
-        if (resp.ok && resp.body) {
-          streamedSuccessfully = true;
-          const reader = resp.body.getReader();
-          const decoder = new TextDecoder("utf-8");
-          let sseBuffer = "";
-
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-
-            sseBuffer += decoder.decode(value, { stream: true });
-            const lines = sseBuffer.split("\n");
-            sseBuffer = lines.pop() || "";
-
-            for (const line of lines) {
-              const trimmed = line.trim();
-              if (!trimmed || trimmed.startsWith(":")) continue;
-              if (trimmed === "data: [DONE]") {
-                break;
-              }
-              if (trimmed.startsWith("data:")) {
-                const jsonStr = trimmed.slice(5).trim();
-                try {
-                  const chunk = JSON.parse(jsonStr);
-                  const delta = chunk.choices?.[0]?.delta;
-                  if (delta) {
-                    if (delta.reasoning_content) {
-                      reasoningAccumulated += delta.reasoning_content;
-                    }
-                    if (delta.content) {
-                      contentAccumulated += delta.content;
-                    }
-
-                    if (reasoningAccumulated && !contentAccumulated.includes("<think>")) {
-                      accumulatedText = `<think>\n${reasoningAccumulated}\n</think>\n${contentAccumulated}`;
-                    } else {
-                      accumulatedText = contentAccumulated;
-                    }
-
-                    targetNode.content = accumulatedText;
-                    if (bubbleEl) {
-                      renderBubbleContent(bubbleEl, accumulatedText, true);
-                    }
-                    container.scrollTop = container.scrollHeight;
-                  }
-                } catch {
-                  // Ignore partial chunk parse error
-                }
-              }
-            }
-          }
-
-          if (sseBuffer.trim().startsWith("data:") && sseBuffer.trim() !== "data: [DONE]") {
-            try {
-              const chunk = JSON.parse(sseBuffer.trim().slice(5).trim());
-              const delta = chunk.choices?.[0]?.delta;
-              if (delta) {
-                if (delta.reasoning_content) reasoningAccumulated += delta.reasoning_content;
-                if (delta.content) contentAccumulated += delta.content;
-                if (reasoningAccumulated && !contentAccumulated.includes("<think>")) {
-                  accumulatedText = `<think>\n${reasoningAccumulated}\n</think>\n${contentAccumulated}`;
-                } else {
-                  accumulatedText = contentAccumulated;
-                }
-                targetNode.content = accumulatedText;
-              }
-            } catch {}
-          }
-        }
-      } catch (fetchErr) {
-        console.warn("Direct stream fetch failed, falling back to non-streaming RPC:", fetchErr);
-        streamedSuccessfully = false;
-      }
-
-      // If streaming didn't succeed, fallback to non-streaming RPC
-      if (!streamedSuccessfully) {
-        const reply = modelArg
-          ? await LlamaService.sendChatWithModel(modelArg, messagesToSend, tempVal, reasoningEffort)
-          : await LlamaService.sendChat(messagesToSend, tempVal, reasoningEffort);
-        targetNode.content = reply;
-      }
-
-      saveSession(currentSession);
-      renderSessions();
-      renderStage();
+      // Stream directly via Go backend (100% OS-agnostic across Linux, macOS, and Windows)
+      await LlamaService.streamChat(
+        currentSession.id,
+        modelArg,
+        messagesToSend,
+        tempVal,
+        reasoningEffort
+      );
     } catch (err: any) {
       targetNode.content = `Error: ${err.message || err}`;
       saveSession(currentSession);
       renderStage();
-    } finally {
-      if (sendBtn) sendBtn.disabled = false;
+      setGeneratingState(false);
+      activeStreamingSessionId = "";
     }
   }
 

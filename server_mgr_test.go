@@ -283,7 +283,19 @@ func TestRealStartServerIfExists(t *testing.T) {
 	if err := svc.StartServer(cfg); err != nil {
 		t.Fatalf("StartServer failed: %v", err)
 	}
-	_ = svc.StopServer()
+	defer func() {
+		_ = svc.StopServer()
+	}()
+
+	reply, err := svc.SendChat([]ChatMessage{
+		{Role: "user", Content: "Say hi in one word"},
+	}, 0.7, "")
+	if err != nil {
+		t.Fatalf("SendChat failed: %v", err)
+	}
+	if reply == "" {
+		t.Errorf("Expected non-empty reply from chat completion, got empty")
+	}
 }
 
 

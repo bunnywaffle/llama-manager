@@ -2,7 +2,10 @@ package main
 
 import (
 	"bufio"
+	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -15,6 +18,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/egoist/mygo"
 )
 
 // ServerConfig holds the launch configuration parameters for llama-server.
@@ -113,6 +118,8 @@ type ServerManager struct {
 	logCallback    func(string)
 	statusCallback func(ServerStatus)
 	lastError      string
+	streamMu       sync.Mutex
+	streamCancels  map[string]context.CancelFunc
 }
 
 func getDefaultServerConfig() ServerConfig {
@@ -148,10 +155,11 @@ func getDefaultServerConfig() ServerConfig {
 
 func NewServerManager(binDir, appDataDir string) *ServerManager {
 	return &ServerManager{
-		binDir:     binDir,
-		appDataDir: appDataDir,
-		maxLogs:    1000,
-		cfg:        getDefaultServerConfig(),
+		binDir:        binDir,
+		appDataDir:    appDataDir,
+		maxLogs:       1000,
+		cfg:           getDefaultServerConfig(),
+		streamCancels: make(map[string]context.CancelFunc),
 	}
 }
 
@@ -332,11 +340,15 @@ func (sm *ServerManager) Start(cfg ServerConfig) error {
 				return fmt.Errorf("llama-server stopped unexpectedly during startup: %s", snippet)
 			}
 
-			// Test health endpoint: HTTP 200 (OK) or 503 (loading model) confirms the server is alive
+			// Test health endpoint: ONLY HTTP 200 (OK) confirms the server has finished loading and is ready for inferences.
+			// HTTP 503 means the server process is alive but still actively loading model weights into memory.
 			if resp, err := healthClient.Get(healthURL); err == nil {
+				code := resp.StatusCode
 				resp.Body.Close()
-				startedSuccessfully = true
-				break
+				if code == http.StatusOK {
+					startedSuccessfully = true
+					break
+				}
 			}
 		}
 		if startedSuccessfully {
@@ -695,7 +707,11 @@ func (sm *ServerManager) startProcess(cfg ServerConfig) (chan error, string, err
 
 	sm.addLogLocked(fmt.Sprintf("[System] Started llama-server with model %s on %s:%d", filepath.Base(cfg.ModelPath), cfg.Host, cfg.Port))
 
-	healthURL := fmt.Sprintf("http://%s:%d/health", cfg.Host, cfg.Port)
+	targetHost := cfg.Host
+	if targetHost == "" || targetHost == "0.0.0.0" {
+		targetHost = "127.0.0.1"
+	}
+	healthURL := fmt.Sprintf("http://%s:%d/health", targetHost, cfg.Port)
 	return exitChan, healthURL, nil
 }
 
@@ -831,7 +847,11 @@ func (sm *ServerManager) GetStatus() ServerStatus {
 }
 
 func (sm *ServerManager) queryServerMetrics() {
-	url := fmt.Sprintf("http://%s:%d/health", sm.cfg.Host, sm.cfg.Port)
+	targetHost := sm.cfg.Host
+	if targetHost == "" || targetHost == "0.0.0.0" {
+		targetHost = "127.0.0.1"
+	}
+	url := fmt.Sprintf("http://%s:%d/health", targetHost, sm.cfg.Port)
 	client := http.Client{Timeout: 500 * time.Millisecond}
 	resp, err := client.Get(url)
 	if err == nil {
@@ -931,7 +951,11 @@ func (sm *ServerManager) SendChatMessageWithModel(model string, messages []ChatM
 		return "", err
 	}
 
-	url := fmt.Sprintf("http://%s:%d/v1/chat/completions", host, port)
+	targetHost := host
+	if targetHost == "" || targetHost == "0.0.0.0" {
+		targetHost = "127.0.0.1"
+	}
+	url := fmt.Sprintf("http://%s:%d/v1/chat/completions", targetHost, port)
 	client := http.Client{Timeout: 180 * time.Second}
 	resp, err := client.Post(url, "application/json", strings.NewReader(string(jsonData)))
 	if err != nil {
@@ -941,6 +965,9 @@ func (sm *ServerManager) SendChatMessageWithModel(model string, messages []ChatM
 
 	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(resp.Body)
+		if resp.StatusCode == http.StatusServiceUnavailable {
+			return "", fmt.Errorf("model is still loading (HTTP 503). Please wait a few seconds and try again")
+		}
 		return "", fmt.Errorf("llama-server returned HTTP %d: %s", resp.StatusCode, string(b))
 	}
 
@@ -979,4 +1006,163 @@ func (sm *ServerManager) SendChatMessageWithModel(model string, messages []ChatM
 	}
 
 	return "", fmt.Errorf("no response choices returned")
+}
+
+// StopChatStream cancels an ongoing streaming chat request for the given session.
+func (sm *ServerManager) StopChatStream(sessionID string) error {
+	sm.streamMu.Lock()
+	defer sm.streamMu.Unlock()
+	if cancel, exists := sm.streamCancels[sessionID]; exists {
+		cancel()
+		delete(sm.streamCancels, sessionID)
+	}
+	return nil
+}
+
+// StreamChatMessage proxies streaming chat completions directly from llama-server via Go
+// to completely bypass browser CORS and WebKitGTK mixed-content restrictions across Linux and macOS.
+func (sm *ServerManager) StreamChatMessage(win *mygo.Window, sessionID string, model string, messages []ChatMessage, temperature float64, reasoningEffort string) error {
+	sm.mu.Lock()
+	host := sm.cfg.Host
+	port := sm.cfg.Port
+	running := sm.running
+	defaultEffort := sm.cfg.ReasoningEffort
+	sm.mu.Unlock()
+
+	if !running {
+		return fmt.Errorf("server is not running")
+	}
+
+	targetHost := host
+	if targetHost == "" || targetHost == "0.0.0.0" {
+		targetHost = "127.0.0.1"
+	}
+
+	reqBody := map[string]interface{}{
+		"messages":    messages,
+		"temperature": temperature,
+		"stream":      true,
+	}
+	if model != "" {
+		reqBody["model"] = model
+	}
+
+	effort := strings.TrimSpace(reasoningEffort)
+	if effort == "" {
+		effort = strings.TrimSpace(defaultEffort)
+	}
+
+	if effort != "" && effort != "default" && effort != "auto" {
+		if effort == "off" || effort == "none" {
+			reqBody["chat_template_kwargs"] = map[string]interface{}{"enable_thinking": false}
+		} else {
+			reqBody["reasoning_effort"] = effort
+			reqBody["chat_template_kwargs"] = map[string]interface{}{"reasoning_effort": effort}
+		}
+	}
+
+	jsonData, err := json.Marshal(reqBody)
+	if err != nil {
+		return err
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	sm.streamMu.Lock()
+	if sm.streamCancels == nil {
+		sm.streamCancels = make(map[string]context.CancelFunc)
+	}
+	if oldCancel, exists := sm.streamCancels[sessionID]; exists {
+		oldCancel()
+	}
+	sm.streamCancels[sessionID] = cancel
+	sm.streamMu.Unlock()
+
+	defer func() {
+		sm.streamMu.Lock()
+		delete(sm.streamCancels, sessionID)
+		sm.streamMu.Unlock()
+		cancel()
+	}()
+
+	url := fmt.Sprintf("http://%s:%d/v1/chat/completions", targetHost, port)
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(jsonData))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	client := http.Client{Timeout: 300 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		if errors.Is(ctx.Err(), context.Canceled) {
+			return nil
+		}
+		return fmt.Errorf("failed to call llama-server: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		if resp.StatusCode == http.StatusServiceUnavailable {
+			return fmt.Errorf("model is still loading (HTTP 503). Please wait a few seconds and try again")
+		}
+		return fmt.Errorf("llama-server returned HTTP %d: %s", resp.StatusCode, string(b))
+	}
+
+	reader := bufio.NewReader(resp.Body)
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			if errors.Is(ctx.Err(), context.Canceled) {
+				break
+			}
+			break
+		}
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, ":") {
+			continue
+		}
+		if trimmed == "data: [DONE]" {
+			break
+		}
+		if strings.HasPrefix(trimmed, "data:") {
+			dataJSON := strings.TrimSpace(trimmed[5:])
+			var chunk struct {
+				Choices []struct {
+					Delta struct {
+						Content          string `json:"content"`
+						ReasoningContent string `json:"reasoning_content"`
+						Reasoning        string `json:"reasoning"`
+					} `json:"delta"`
+				} `json:"choices"`
+			}
+			if err := json.Unmarshal([]byte(dataJSON), &chunk); err == nil {
+				if len(chunk.Choices) > 0 {
+					delta := chunk.Choices[0].Delta
+					reasoning := delta.ReasoningContent
+					if reasoning == "" {
+						reasoning = delta.Reasoning
+					}
+					if delta.Content != "" || reasoning != "" {
+						if win != nil {
+							_ = ChatChunkEvent.Emit(win, ChatStreamChunk{
+								SessionID: sessionID,
+								Content:   delta.Content,
+								Reasoning: reasoning,
+							})
+						}
+					}
+				}
+			}
+		}
+	}
+
+	if win != nil {
+		_ = ChatChunkEvent.Emit(win, ChatStreamChunk{
+			SessionID: sessionID,
+			Done:      true,
+		})
+	}
+
+	return nil
 }

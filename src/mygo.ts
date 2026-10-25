@@ -43,6 +43,15 @@ export interface ChatMessage {
   content: unknown;
 }
 
+/** ChatStreamChunk represents an incremental chat completion token or completion state. */
+export interface ChatStreamChunk {
+  sessionId: string;
+  content: string;
+  reasoning: string;
+  done: boolean;
+  error?: string;
+}
+
 export interface DiagnosticItem {
   /** "executable", "runtime_dlls", "smoke_test", "port", "storage", "gpu" */
   category: string;
@@ -384,9 +393,20 @@ export const LlamaService = {
   startServer(cfg: ServerConfig): Promise<void> {
     return call("LlamaService.StartServer", cfg);
   },
+  /** StopChatStream cancels an ongoing streaming chat request for the given session. */
+  stopChatStream(sessionId: string): Promise<void> {
+    return call("LlamaService.StopChatStream", sessionId);
+  },
   /** StopServer stops the running server process. */
   stopServer(): Promise<void> {
     return call("LlamaService.StopServer");
+  },
+  /**
+   * StreamChat streams tokens from the running llama-server directly via Go to the frontend.
+   * This completely eliminates WebKitGTK/WKWebView mixed-content and CORS blocking across Linux and macOS.
+   */
+  streamChat(sessionId: string, model: string, messages: ChatMessage[], temperature: number, reasoningEffort: string): Promise<void> {
+    return call("LlamaService.StreamChat", sessionId, model, messages, temperature, reasoningEffort);
   },
   /**
    * SwitchBackend downloads or switches the active backend variant
@@ -416,4 +436,5 @@ export const events = {
   serverLog: event<string>("server_log"),
   downloadProgress: event<ProgressReport>("download_progress"),
   serverStatus: event<ServerStatus>("server_status"),
+  chatChunk: event<ChatStreamChunk>("chat_chunk"),
 } as const;
