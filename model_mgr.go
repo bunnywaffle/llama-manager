@@ -114,8 +114,11 @@ func (mm *ModelManager) ListModels() ([]ModelInfo, error) {
 				return nil
 			}
 			if info.IsDir() {
+				if info.Name() == "backends" || info.Name() == "bin" || strings.HasPrefix(info.Name(), ".") {
+					return filepath.SkipDir
+				}
 				rel, relErr := filepath.Rel(dir, p)
-				if relErr == nil && (strings.HasPrefix(info.Name(), ".") || strings.Count(filepath.ToSlash(rel), "/") > 3) {
+				if relErr == nil && strings.Count(filepath.ToSlash(rel), "/") > 3 {
 					return filepath.SkipDir
 				}
 				return nil

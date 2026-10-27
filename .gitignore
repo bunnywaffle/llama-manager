@@ -11,6 +11,7 @@ mygo_windows_*.syso
 bin/
 models/
 tmp_download/
+dist_release/
 settings.json
 .DS_Store
 Thumbs.db

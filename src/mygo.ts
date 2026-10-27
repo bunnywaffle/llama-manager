@@ -46,6 +46,7 @@ export interface ChatMessage {
 /** ChatStreamChunk represents an incremental chat completion token or completion state. */
 export interface ChatStreamChunk {
   sessionId: string;
+  nodeId?: string;
   content: string;
   reasoning: string;
   done: boolean;
@@ -405,8 +406,8 @@ export const LlamaService = {
    * StreamChat streams tokens from the running llama-server directly via Go to the frontend.
    * This completely eliminates WebKitGTK/WKWebView mixed-content and CORS blocking across Linux and macOS.
    */
-  streamChat(sessionId: string, model: string, messages: ChatMessage[], temperature: number, reasoningEffort: string): Promise<void> {
-    return call("LlamaService.StreamChat", sessionId, model, messages, temperature, reasoningEffort);
+  streamChat(sessionId: string, nodeId: string, model: string, messages: ChatMessage[], temperature: number, reasoningEffort: string): Promise<void> {
+    return call("LlamaService.StreamChat", sessionId, nodeId, model, messages, temperature, reasoningEffort);
   },
   /**
    * SwitchBackend downloads or switches the active backend variant

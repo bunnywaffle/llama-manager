@@ -2704,7 +2704,8 @@ function setupChat() {
       bubble.className = `chat-entry ${node.role}`;
 
       if (node.role === "assistant") {
-        renderBubbleContent(bubble, node.content, false);
+        const isStreamingThis = activeStreamingSessionId === currentSession.id && node.id === activeStreamingNodeId;
+        renderBubbleContent(bubble, node.content, isStreamingThis);
       } else {
         let userHtml = "";
         if (node.images && node.images.length > 0) {
@@ -2917,8 +2918,10 @@ function setupChat() {
 
   // Active streaming state tracking
   let activeStreamingSessionId = "";
+  let activeStreamingNodeId = "";
   let activeReasoningText = "";
   let activeContentText = "";
+  let activeStreamingTimeout: any = null;
 
   function setGeneratingState(generating: boolean) {
     const sendBtn = document.querySelector<HTMLButtonElement>("#btn-chat-send");
@@ -2944,16 +2947,31 @@ function setupChat() {
 
     const path = getActiveConversationPath(session);
     const last = path[path.length - 1];
+    const targetNodeId = chunk.nodeId || activeStreamingNodeId;
+    const targetNode = (targetNodeId && session.nodes[targetNodeId]) ? session.nodes[targetNodeId] : last;
 
     if (chunk.error) {
-      if (last && last.role === "assistant") {
-        last.content = `Error: ${chunk.error}`;
+      if (activeStreamingTimeout) {
+        clearTimeout(activeStreamingTimeout);
+        activeStreamingTimeout = null;
+      }
+      if (targetNode && targetNode.role === "assistant") {
+        targetNode.content = `Error: ${chunk.error}`;
         saveSession(session);
         if (isCurrent) renderStage();
       }
       if (isCurrent) setGeneratingState(false);
       activeStreamingSessionId = "";
+      activeStreamingNodeId = "";
+      showToast(chunk.error, "error", "Generation Failed");
       return;
+    }
+
+    if (chunk.reasoning || chunk.content) {
+      if (activeStreamingTimeout) {
+        clearTimeout(activeStreamingTimeout);
+        activeStreamingTimeout = null;
+      }
     }
 
     if (chunk.reasoning) {
@@ -2968,10 +2986,10 @@ function setupChat() {
       fullText = `<think>\n${activeReasoningText}\n</think>\n${activeContentText}`;
     }
 
-    if (last && last.role === "assistant") {
-      last.content = fullText;
+    if (targetNode && targetNode.role === "assistant") {
+      targetNode.content = fullText;
       if (isCurrent) {
-        const bubbleEl = document.querySelector<HTMLElement>(`#chat-node-${last.id} .chat-entry`);
+        const bubbleEl = document.querySelector<HTMLElement>(`#chat-node-${targetNode.id} .chat-entry`);
         if (bubbleEl) {
           renderBubbleContent(bubbleEl, fullText, true);
         }
@@ -2980,8 +2998,12 @@ function setupChat() {
     }
 
     if (chunk.done) {
-      if (last && last.role === "assistant") {
-        last.content = fullText;
+      if (activeStreamingTimeout) {
+        clearTimeout(activeStreamingTimeout);
+        activeStreamingTimeout = null;
+      }
+      if (targetNode && targetNode.role === "assistant") {
+        targetNode.content = fullText;
         saveSession(session);
         if (isCurrent) {
           renderSessions();
@@ -2990,6 +3012,7 @@ function setupChat() {
         }
       }
       activeStreamingSessionId = "";
+      activeStreamingNodeId = "";
     }
   });
 
@@ -2999,9 +3022,14 @@ function setupChat() {
     if (activeStreamingSessionId) {
       e.preventDefault();
       e.stopPropagation();
+      if (activeStreamingTimeout) {
+        clearTimeout(activeStreamingTimeout);
+        activeStreamingTimeout = null;
+      }
       await LlamaService.stopChatStream(activeStreamingSessionId);
       setGeneratingState(false);
       activeStreamingSessionId = "";
+      activeStreamingNodeId = "";
     }
   });
 
@@ -3025,6 +3053,12 @@ function setupChat() {
       saveSession(currentSession);
       renderStage();
     }
+
+    activeStreamingSessionId = currentSession.id;
+    activeStreamingNodeId = targetNode.id;
+    activeReasoningText = "";
+    activeContentText = "";
+    setGeneratingState(true);
 
     const bubbleEl = document.querySelector<HTMLElement>(`#chat-node-${targetNode.id} .chat-entry`);
     if (bubbleEl) {
@@ -3058,32 +3092,60 @@ function setupChat() {
       messagesToSend.unshift({ role: "system" as any, content: persona.systemPrompt });
     }
 
+    const tempVal = Number($<HTMLInputElement>("#cfg-temp")?.value || 0.7);
+    const routerSelect = document.querySelector<HTMLSelectElement>("#chat-router-model-select");
+    const routerCheck = document.querySelector<HTMLInputElement>("#cfg-router-mode");
+    const modelArg = routerCheck && routerCheck.checked && routerSelect && routerSelect.value ? routerSelect.value : "";
+    const reasoningEffort = reasoningSelect ? reasoningSelect.value : (currentSession.reasoningEffort || "default");
+
+    // Fallback safety timeout: if no stream tokens are delivered within 10 seconds, fallback automatically to non-streaming RPC
+    if (activeStreamingTimeout) clearTimeout(activeStreamingTimeout);
+    activeStreamingTimeout = setTimeout(async () => {
+      if (activeStreamingSessionId === currentSession.id && (!activeContentText && !activeReasoningText)) {
+        console.warn("No stream chunks received within 10s, initiating non-streaming fallback...");
+        try {
+          const reply = modelArg
+            ? await LlamaService.sendChatWithModel(modelArg, messagesToSend, tempVal, reasoningEffort)
+            : await LlamaService.sendChat(messagesToSend, tempVal, reasoningEffort);
+          targetNode.content = reply;
+          saveSession(currentSession);
+          renderSessions();
+          renderStage();
+        } catch (fallbackErr: any) {
+          targetNode.content = `Error: ${fallbackErr.message || fallbackErr}`;
+          saveSession(currentSession);
+          renderStage();
+          showToast(fallbackErr.message || String(fallbackErr), "error", "Generation Failed");
+        } finally {
+          setGeneratingState(false);
+          activeStreamingSessionId = "";
+          activeStreamingNodeId = "";
+        }
+      }
+    }, 10000);
+
     try {
-      const tempVal = Number($<HTMLInputElement>("#cfg-temp")?.value || 0.7);
-      const routerSelect = document.querySelector<HTMLSelectElement>("#chat-router-model-select");
-      const routerCheck = document.querySelector<HTMLInputElement>("#cfg-router-mode");
-      const modelArg = routerCheck && routerCheck.checked && routerSelect && routerSelect.value ? routerSelect.value : "";
-      const reasoningEffort = reasoningSelect ? reasoningSelect.value : (currentSession.reasoningEffort || "default");
-
-      activeStreamingSessionId = currentSession.id;
-      activeReasoningText = "";
-      activeContentText = "";
-      setGeneratingState(true);
-
       // Stream directly via Go backend (100% OS-agnostic across Linux, macOS, and Windows)
       await LlamaService.streamChat(
         currentSession.id,
+        targetNode.id,
         modelArg,
         messagesToSend,
         tempVal,
         reasoningEffort
       );
     } catch (err: any) {
+      if (activeStreamingTimeout) {
+        clearTimeout(activeStreamingTimeout);
+        activeStreamingTimeout = null;
+      }
       targetNode.content = `Error: ${err.message || err}`;
       saveSession(currentSession);
       renderStage();
       setGeneratingState(false);
       activeStreamingSessionId = "";
+      activeStreamingNodeId = "";
+      showToast(err.message || String(err), "error", "Stream Error");
     }
   }
 

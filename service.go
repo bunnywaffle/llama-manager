@@ -17,6 +17,7 @@ import (
 // ChatStreamChunk represents an incremental chat completion token or completion state.
 type ChatStreamChunk struct {
 	SessionID string `json:"sessionId"`
+	NodeID    string `json:"nodeId,omitempty"`
 	Content   string `json:"content"`
 	Reasoning string `json:"reasoning"`
 	Done      bool   `json:"done"`
@@ -77,17 +78,28 @@ func NewLlamaService(appDataDir string) *LlamaService {
 		}
 		if settings.AppDataDir != "" {
 			appDataDir = settings.AppDataDir
-			binDir = filepath.Join(appDataDir, "bin")
 		}
+	}
+
+	// Store backends and bin strictly in the user-configured models directory
+	backendsDir := filepath.Join(modelsDir, "backends")
+	binDir = filepath.Join(modelsDir, "bin")
+	_ = os.MkdirAll(backendsDir, 0755)
+	_ = os.MkdirAll(binDir, 0755)
+
+	// Seamlessly auto-migrate any previously installed backends from appDataDir to modelsDir
+	if appDataDir != "" && modelsDir != appDataDir {
+		migrateDirContents(filepath.Join(appDataDir, "backends"), backendsDir)
+		migrateDirContents(filepath.Join(appDataDir, "bin"), binDir)
 	}
 
 	svc := &LlamaService{
 		appDataDir: appDataDir,
 		settings:   settings,
 		hwInfo:     hw,
-		releaseMgr: NewReleaseManager(binDir, appDataDir),
+		releaseMgr: NewReleaseManager(binDir, appDataDir, backendsDir),
 		modelMgr:   NewModelManager(modelsDir, appDataDir),
-		serverMgr:  NewServerManager(binDir, appDataDir),
+		serverMgr:  NewServerManager(binDir, appDataDir, backendsDir),
 	}
 
 	svc.serverMgr.SetLogCallback(func(line string) {
@@ -640,6 +652,17 @@ func (s *LlamaService) SetModelsDir(dir string) error {
 		return err
 	}
 	s.settings.ModelsDir = dir
+
+	newBinDir := filepath.Join(dir, "bin")
+	newBackendsDir := filepath.Join(dir, "backends")
+	_ = os.MkdirAll(newBinDir, 0755)
+	_ = os.MkdirAll(newBackendsDir, 0755)
+
+	s.releaseMgr.SetBinDir(newBinDir)
+	s.releaseMgr.SetBackendsDir(newBackendsDir)
+	s.serverMgr.SetBinDir(newBinDir)
+	s.serverMgr.SetBackendsDir(newBackendsDir)
+
 	return s.saveSettingsToFile()
 }
 
@@ -737,22 +760,54 @@ func (s *LlamaService) SendChatWithModel(model string, messages []ChatMessage, t
 
 // StreamChat streams tokens from the running llama-server directly via Go to the frontend.
 // This completely eliminates WebKitGTK/WKWebView mixed-content and CORS blocking across Linux and macOS.
-func (s *LlamaService) StreamChat(sessionId string, model string, messages []ChatMessage, temperature float64, reasoningEffort string) error {
+func (s *LlamaService) StreamChat(sessionId string, nodeId string, model string, messages []ChatMessage, temperature float64, reasoningEffort string) error {
 	s.mu.Lock()
 	win := s.win
 	s.mu.Unlock()
 
 	go func() {
-		err := s.serverMgr.StreamChatMessage(win, sessionId, model, messages, temperature, reasoningEffort)
-		if err != nil && win != nil {
-			_ = ChatChunkEvent.Emit(win, ChatStreamChunk{
+		err := s.serverMgr.StreamChatMessage(win, sessionId, nodeId, model, messages, temperature, reasoningEffort)
+		if err != nil {
+			chunk := ChatStreamChunk{
 				SessionID: sessionId,
+				NodeID:    nodeId,
 				Done:      true,
 				Error:     err.Error(),
-			})
+			}
+			if win != nil {
+				_ = ChatChunkEvent.Emit(win, chunk)
+			}
+			_ = ChatChunkEvent.Broadcast(chunk)
 		}
 	}()
 	return nil
+}
+
+func migrateDirContents(srcDir, dstDir string) {
+	if srcDir == "" || dstDir == "" || srcDir == dstDir {
+		return
+	}
+	srcInfo, err := os.Stat(srcDir)
+	if err != nil || !srcInfo.IsDir() {
+		return
+	}
+	entries, err := os.ReadDir(srcDir)
+	if err != nil || len(entries) == 0 {
+		return
+	}
+	_ = os.MkdirAll(dstDir, 0755)
+	for _, e := range entries {
+		srcItem := filepath.Join(srcDir, e.Name())
+		dstItem := filepath.Join(dstDir, e.Name())
+		if _, err := os.Stat(dstItem); err == nil {
+			continue
+		}
+		if e.IsDir() {
+			_ = linkOrMirrorDir(srcItem, dstItem)
+		} else {
+			_ = copyFile(srcItem, dstItem)
+		}
+	}
 }
 
 // StopChatStream cancels an ongoing streaming chat request for the given session.

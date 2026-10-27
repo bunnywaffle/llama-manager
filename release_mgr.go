@@ -296,21 +296,29 @@ type ProgressReport struct {
 }
 
 type ReleaseManager struct {
-	binDir     string
-	appDataDir string
-	client     *http.Client
-	mu         sync.Mutex
-	isBusy     bool
-	cancelChan chan struct{}
+	binDir      string
+	backendsDir string
+	appDataDir  string
+	client      *http.Client
+	mu          sync.Mutex
+	isBusy      bool
+	cancelChan  chan struct{}
 }
 
-func NewReleaseManager(binDir, appDataDir string) *ReleaseManager {
+func NewReleaseManager(binDir, appDataDir string, backendsDir ...string) *ReleaseManager {
+	bDir := ""
+	if len(backendsDir) > 0 && backendsDir[0] != "" {
+		bDir = backendsDir[0]
+	} else {
+		bDir = filepath.Join(appDataDir, "backends")
+	}
 	_ = os.MkdirAll(binDir, 0755)
-	_ = os.MkdirAll(filepath.Join(appDataDir, "backends"), 0755)
+	_ = os.MkdirAll(bDir, 0755)
 	return &ReleaseManager{
-		binDir:     binDir,
-		appDataDir: appDataDir,
-		client:     &http.Client{Timeout: 60 * time.Second},
+		binDir:      binDir,
+		backendsDir: bDir,
+		appDataDir:  appDataDir,
+		client:      &http.Client{Timeout: 60 * time.Second},
 	}
 }
 
@@ -319,6 +327,20 @@ func (rm *ReleaseManager) SetBinDir(dir string) {
 	defer rm.mu.Unlock()
 	rm.binDir = dir
 	_ = os.MkdirAll(dir, 0755)
+}
+
+func (rm *ReleaseManager) SetBackendsDir(dir string) {
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+	rm.backendsDir = dir
+	_ = os.MkdirAll(dir, 0755)
+}
+
+func (rm *ReleaseManager) getBackendsDirLocked() string {
+	if rm.backendsDir != "" {
+		return rm.backendsDir
+	}
+	return filepath.Join(rm.appDataDir, "backends")
 }
 
 func (rm *ReleaseManager) GetInstalledBackend() BackendStatus {
@@ -352,13 +374,17 @@ func (rm *ReleaseManager) GetInstalledBackend() BackendStatus {
 
 	// Auto-recovery: If rm.binDir does not have the executable, inspect backendsDir
 	if !status.Installed {
-		backendsDir := filepath.Join(rm.appDataDir, "backends")
-		entries, _ := os.ReadDir(backendsDir)
-		for _, e := range entries {
-			if !e.IsDir() {
-				continue
-			}
-			candDir := filepath.Join(backendsDir, e.Name())
+		backendsDirs := []string{rm.getBackendsDirLocked()}
+		if rm.appDataDir != "" && filepath.Join(rm.appDataDir, "backends") != rm.getBackendsDirLocked() {
+			backendsDirs = append(backendsDirs, filepath.Join(rm.appDataDir, "backends"))
+		}
+		for _, bDir := range backendsDirs {
+			entries, _ := os.ReadDir(bDir)
+			for _, e := range entries {
+				if !e.IsDir() {
+					continue
+				}
+			candDir := filepath.Join(bDir, e.Name())
 			candExe := filepath.Join(candDir, getServerExeName())
 			if _, err := os.Stat(candExe); err == nil {
 				status.HasServer = true
@@ -379,7 +405,11 @@ func (rm *ReleaseManager) GetInstalledBackend() BackendStatus {
 				break
 			}
 		}
+		if status.Installed {
+			break
+		}
 	}
+}
 
 	return status
 }
@@ -388,7 +418,7 @@ func (rm *ReleaseManager) GetInstalledBackends(activeVariant string) []BackendVa
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
 
-	backendsDir := filepath.Join(rm.appDataDir, "backends")
+	backendsDir := rm.getBackendsDirLocked()
 	var variants []string
 	switch runtime.GOOS {
 	case "darwin":
@@ -475,7 +505,7 @@ func (rm *ReleaseManager) GetInstalledVersions() []InstalledVersionInfo {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
 
-	backendsDir := filepath.Join(rm.appDataDir, "backends")
+	backendsDir := rm.getBackendsDirLocked()
 	_ = os.MkdirAll(backendsDir, 0755)
 
 	serverExeName := getServerExeName()
@@ -501,19 +531,26 @@ func (rm *ReleaseManager) GetInstalledVersions() []InstalledVersionInfo {
 		hasBinExe = true
 	}
 
-	entries, err := os.ReadDir(backendsDir)
-	if err != nil {
-		return nil
+	backendsDirs := []string{backendsDir}
+	if rm.appDataDir != "" && filepath.Join(rm.appDataDir, "backends") != backendsDir {
+		backendsDirs = append(backendsDirs, filepath.Join(rm.appDataDir, "backends"))
 	}
 
 	var results []InstalledVersionInfo
 	foundActive := false
+	seenIds := make(map[string]bool)
 
-	for _, e := range entries {
-		if !e.IsDir() {
+	for _, bDir := range backendsDirs {
+		entries, err := os.ReadDir(bDir)
+		if err != nil {
 			continue
 		}
-		subDir := filepath.Join(backendsDir, e.Name())
+		for _, e := range entries {
+			if !e.IsDir() || seenIds[e.Name()] {
+				continue
+			}
+			seenIds[e.Name()] = true
+			subDir := filepath.Join(bDir, e.Name())
 		exePath := filepath.Join(subDir, serverExeName)
 		fi, err := os.Stat(exePath)
 		if err != nil {
@@ -602,6 +639,7 @@ func (rm *ReleaseManager) GetInstalledVersions() []InstalledVersionInfo {
 			InstalledAt:    modTime,
 			IsActive:       isActive,
 		})
+		}
 	}
 
 	// Legacy fallback: If binDir has executable but backendsDir was empty
@@ -721,7 +759,7 @@ func (rm *ReleaseManager) GetVersionDir(id string) string {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
 
-	backendsDir := filepath.Join(rm.appDataDir, "backends")
+	backendsDir := rm.getBackendsDirLocked()
 	targetDir := filepath.Join(backendsDir, id)
 	if _, err := os.Stat(filepath.Join(targetDir, getServerExeName())); err == nil {
 		return targetDir
@@ -743,24 +781,35 @@ func (rm *ReleaseManager) ActivateVersion(id string) error {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
 
-	backendsDir := filepath.Join(rm.appDataDir, "backends")
+	backendsDir := rm.getBackendsDirLocked()
 	targetDir := filepath.Join(backendsDir, id)
 	targetExe := filepath.Join(targetDir, getServerExeName())
 
 	if _, err := os.Stat(targetExe); err != nil {
-		entries, _ := os.ReadDir(backendsDir)
-		for _, e := range entries {
-			if e.IsDir() && (e.Name() == id || strings.HasSuffix(e.Name(), "-"+id)) {
-				cand := filepath.Join(backendsDir, e.Name())
-				if _, err := os.Stat(filepath.Join(cand, getServerExeName())); err == nil {
-					targetDir = cand
-					targetExe = filepath.Join(cand, getServerExeName())
-					id = e.Name()
-					break
+		backendsDirs := []string{backendsDir}
+		if rm.appDataDir != "" && filepath.Join(rm.appDataDir, "backends") != backendsDir {
+			backendsDirs = append(backendsDirs, filepath.Join(rm.appDataDir, "backends"))
+		}
+		found := false
+		for _, bDir := range backendsDirs {
+			entries, _ := os.ReadDir(bDir)
+			for _, e := range entries {
+				if e.IsDir() && (e.Name() == id || strings.HasSuffix(e.Name(), "-"+id)) {
+					cand := filepath.Join(bDir, e.Name())
+					if _, err := os.Stat(filepath.Join(cand, getServerExeName())); err == nil {
+						targetDir = cand
+						targetExe = filepath.Join(cand, getServerExeName())
+						id = e.Name()
+						found = true
+						break
+					}
 				}
 			}
+			if found {
+				break
+			}
 		}
-		if _, err := os.Stat(targetExe); err != nil {
+		if !found {
 			return fmt.Errorf("version %s is not installed in %s", id, targetDir)
 		}
 	}
@@ -808,7 +857,7 @@ func (rm *ReleaseManager) UninstallVersion(id string) error {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
 
-	backendsDir := filepath.Join(rm.appDataDir, "backends")
+	backendsDir := rm.getBackendsDirLocked()
 	targetDir := filepath.Join(backendsDir, id)
 	_ = removeDirOrLink(targetDir)
 
@@ -859,7 +908,7 @@ func (rm *ReleaseManager) UninstallBackend(variant, activeVariant string) error 
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
 
-	backendsDir := filepath.Join(rm.appDataDir, "backends")
+	backendsDir := rm.getBackendsDirLocked()
 	targetDir := filepath.Join(backendsDir, variant)
 	_ = os.RemoveAll(targetDir)
 
@@ -882,7 +931,7 @@ func (rm *ReleaseManager) UninstallAllBackends() error {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
 
-	backendsDir := filepath.Join(rm.appDataDir, "backends")
+	backendsDir := rm.getBackendsDirLocked()
 	_ = os.RemoveAll(backendsDir)
 	_ = os.MkdirAll(backendsDir, 0755)
 
@@ -893,7 +942,7 @@ func (rm *ReleaseManager) UninstallAllBackends() error {
 }
 
 func (rm *ReleaseManager) ActivateBackend(variant string) error {
-	backendsDir := filepath.Join(rm.appDataDir, "backends")
+	backendsDir := rm.getBackendsDirLocked()
 	targetDir := filepath.Join(backendsDir, variant)
 	targetExe := filepath.Join(targetDir, getServerExeName())
 
@@ -1094,12 +1143,12 @@ func (rm *ReleaseManager) DownloadAndInstall(tag, variant string, onProgress fun
 		versionId = variant
 	}
 
-	backendsDir := filepath.Join(rm.appDataDir, "backends")
+	backendsDir := rm.getBackendsDirLocked()
 	targetDir := filepath.Join(backendsDir, versionId)
 	_ = os.RemoveAll(targetDir)
 	_ = os.MkdirAll(targetDir, 0755)
 
-	tempDir := filepath.Join(rm.appDataDir, "tmp_download")
+	tempDir := filepath.Join(backendsDir, ".tmp_download")
 	_ = os.RemoveAll(tempDir)
 	_ = os.MkdirAll(tempDir, 0755)
 	defer os.RemoveAll(tempDir)

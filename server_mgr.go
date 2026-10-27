@@ -107,6 +107,7 @@ type ServerStatus struct {
 
 type ServerManager struct {
 	binDir         string
+	backendsDir    string
 	appDataDir     string
 	cmd            *exec.Cmd
 	cfg            ServerConfig
@@ -153,14 +154,27 @@ func getDefaultServerConfig() ServerConfig {
 	}
 }
 
-func NewServerManager(binDir, appDataDir string) *ServerManager {
+func NewServerManager(binDir, appDataDir string, backendsDir ...string) *ServerManager {
+	bDir := ""
+	if len(backendsDir) > 0 && backendsDir[0] != "" {
+		bDir = backendsDir[0]
+	} else {
+		bDir = filepath.Join(appDataDir, "backends")
+	}
 	return &ServerManager{
 		binDir:        binDir,
+		backendsDir:   bDir,
 		appDataDir:    appDataDir,
 		maxLogs:       1000,
 		cfg:           getDefaultServerConfig(),
 		streamCancels: make(map[string]context.CancelFunc),
 	}
+}
+
+func (sm *ServerManager) SetBackendsDir(dir string) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	sm.backendsDir = dir
 }
 
 func (sm *ServerManager) getModelConfigFilePaths(modelPath string) (primaryPath, fallbackPath string) {
@@ -378,17 +392,28 @@ func (sm *ServerManager) startProcess(cfg ServerConfig) (chan error, string, err
 	serverExe := filepath.Join(sm.binDir, getServerExeName())
 	if _, err := os.Stat(serverExe); err != nil {
 		// Try resolving active executable from backends directory
-		backendsDir := filepath.Join(sm.appDataDir, "backends")
-		entries, _ := os.ReadDir(backendsDir)
-		for _, e := range entries {
-			if !e.IsDir() {
+		backendsDirs := []string{sm.backendsDir}
+		if sm.appDataDir != "" && filepath.Join(sm.appDataDir, "backends") != sm.backendsDir {
+			backendsDirs = append(backendsDirs, filepath.Join(sm.appDataDir, "backends"))
+		}
+		for _, bDir := range backendsDirs {
+			if bDir == "" {
 				continue
 			}
-			candDir := filepath.Join(backendsDir, e.Name())
-			candExe := filepath.Join(candDir, getServerExeName())
-			if _, statErr := os.Stat(candExe); statErr == nil {
-				sm.binDir = candDir
-				serverExe = candExe
+			entries, _ := os.ReadDir(bDir)
+			for _, e := range entries {
+				if !e.IsDir() {
+					continue
+				}
+				candDir := filepath.Join(bDir, e.Name())
+				candExe := filepath.Join(candDir, getServerExeName())
+				if _, statErr := os.Stat(candExe); statErr == nil {
+					sm.binDir = candDir
+					serverExe = candExe
+					break
+				}
+			}
+			if _, statErr := os.Stat(serverExe); statErr == nil {
 				break
 			}
 		}
@@ -1021,7 +1046,14 @@ func (sm *ServerManager) StopChatStream(sessionID string) error {
 
 // StreamChatMessage proxies streaming chat completions directly from llama-server via Go
 // to completely bypass browser CORS and WebKitGTK mixed-content restrictions across Linux and macOS.
-func (sm *ServerManager) StreamChatMessage(win *mygo.Window, sessionID string, model string, messages []ChatMessage, temperature float64, reasoningEffort string) error {
+func (sm *ServerManager) StreamChatMessage(win *mygo.Window, sessionID string, nodeID string, model string, messages []ChatMessage, temperature float64, reasoningEffort string) error {
+	emitChunk := func(c ChatStreamChunk) {
+		if win != nil {
+			_ = ChatChunkEvent.Emit(win, c)
+		}
+		_ = ChatChunkEvent.Broadcast(c)
+	}
+
 	sm.mu.Lock()
 	host := sm.cfg.Host
 	port := sm.cfg.Port
@@ -1030,7 +1062,14 @@ func (sm *ServerManager) StreamChatMessage(win *mygo.Window, sessionID string, m
 	sm.mu.Unlock()
 
 	if !running {
-		return fmt.Errorf("server is not running")
+		err := fmt.Errorf("server is not running. Please start the server on the Overview tab first")
+		emitChunk(ChatStreamChunk{
+			SessionID: sessionID,
+			NodeID:    nodeID,
+			Error:     err.Error(),
+			Done:      true,
+		})
+		return err
 	}
 
 	targetHost := host
@@ -1063,6 +1102,12 @@ func (sm *ServerManager) StreamChatMessage(win *mygo.Window, sessionID string, m
 
 	jsonData, err := json.Marshal(reqBody)
 	if err != nil {
+		emitChunk(ChatStreamChunk{
+			SessionID: sessionID,
+			NodeID:    nodeID,
+			Error:     err.Error(),
+			Done:      true,
+		})
 		return err
 	}
 
@@ -1087,6 +1132,12 @@ func (sm *ServerManager) StreamChatMessage(win *mygo.Window, sessionID string, m
 	url := fmt.Sprintf("http://%s:%d/v1/chat/completions", targetHost, port)
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(jsonData))
 	if err != nil {
+		emitChunk(ChatStreamChunk{
+			SessionID: sessionID,
+			NodeID:    nodeID,
+			Error:     err.Error(),
+			Done:      true,
+		})
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
@@ -1097,19 +1148,35 @@ func (sm *ServerManager) StreamChatMessage(win *mygo.Window, sessionID string, m
 		if errors.Is(ctx.Err(), context.Canceled) {
 			return nil
 		}
+		emitChunk(ChatStreamChunk{
+			SessionID: sessionID,
+			NodeID:    nodeID,
+			Error:     fmt.Sprintf("Failed to call llama-server: %v", err),
+			Done:      true,
+		})
 		return fmt.Errorf("failed to call llama-server: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(resp.Body)
+		errText := string(b)
 		if resp.StatusCode == http.StatusServiceUnavailable {
-			return fmt.Errorf("model is still loading (HTTP 503). Please wait a few seconds and try again")
+			errText = "model is still loading (HTTP 503). Please wait a few seconds and try again"
+		} else if strings.TrimSpace(errText) == "" {
+			errText = fmt.Sprintf("llama-server returned HTTP %d", resp.StatusCode)
 		}
-		return fmt.Errorf("llama-server returned HTTP %d: %s", resp.StatusCode, string(b))
+		emitChunk(ChatStreamChunk{
+			SessionID: sessionID,
+			NodeID:    nodeID,
+			Error:     errText,
+			Done:      true,
+		})
+		return fmt.Errorf("%s", errText)
 	}
 
 	reader := bufio.NewReader(resp.Body)
+	totalTokens := 0
 	for {
 		line, err := reader.ReadString('\n')
 		if err != nil {
@@ -1126,43 +1193,106 @@ func (sm *ServerManager) StreamChatMessage(win *mygo.Window, sessionID string, m
 			break
 		}
 		if strings.HasPrefix(trimmed, "data:") {
-			dataJSON := strings.TrimSpace(trimmed[5:])
+			dataJSON := strings.TrimSpace(strings.TrimPrefix(trimmed, "data:"))
+			if dataJSON == "[DONE]" {
+				break
+			}
+
+			// Handle potential server-side error payload
+			var errPayload struct {
+				Error struct {
+					Message string `json:"message"`
+					Code    int    `json:"code"`
+				} `json:"error"`
+			}
+			if err := json.Unmarshal([]byte(dataJSON), &errPayload); err == nil && errPayload.Error.Message != "" {
+				emitChunk(ChatStreamChunk{
+					SessionID: sessionID,
+					NodeID:    nodeID,
+					Error:     errPayload.Error.Message,
+					Done:      true,
+				})
+				return fmt.Errorf("llama-server stream error: %s", errPayload.Error.Message)
+			}
+
 			var chunk struct {
 				Choices []struct {
 					Delta struct {
 						Content          string `json:"content"`
 						ReasoningContent string `json:"reasoning_content"`
 						Reasoning        string `json:"reasoning"`
+						Text             string `json:"text"`
 					} `json:"delta"`
+					Text    string `json:"text"`
+					Message struct {
+						Content          string `json:"content"`
+						ReasoningContent string `json:"reasoning_content"`
+					} `json:"message"`
 				} `json:"choices"`
 			}
 			if err := json.Unmarshal([]byte(dataJSON), &chunk); err == nil {
 				if len(chunk.Choices) > 0 {
-					delta := chunk.Choices[0].Delta
-					reasoning := delta.ReasoningContent
-					if reasoning == "" {
-						reasoning = delta.Reasoning
+					choice := chunk.Choices[0]
+					content := choice.Delta.Content
+					if content == "" {
+						content = choice.Delta.Text
 					}
-					if delta.Content != "" || reasoning != "" {
-						if win != nil {
-							_ = ChatChunkEvent.Emit(win, ChatStreamChunk{
-								SessionID: sessionID,
-								Content:   delta.Content,
-								Reasoning: reasoning,
-							})
-						}
+					if content == "" {
+						content = choice.Text
+					}
+					if content == "" {
+						content = choice.Message.Content
+					}
+
+					reasoning := choice.Delta.ReasoningContent
+					if reasoning == "" {
+						reasoning = choice.Delta.Reasoning
+					}
+					if reasoning == "" {
+						reasoning = choice.Message.ReasoningContent
+					}
+
+					if content != "" || reasoning != "" {
+						totalTokens++
+						emitChunk(ChatStreamChunk{
+							SessionID: sessionID,
+							NodeID:    nodeID,
+							Content:   content,
+							Reasoning: reasoning,
+						})
 					}
 				}
 			}
 		}
 	}
 
-	if win != nil {
-		_ = ChatChunkEvent.Emit(win, ChatStreamChunk{
+	// Automatic Fallback: if streaming completed with 0 tokens and was not explicitly cancelled,
+	// fall back directly to non-streaming RPC completion to guarantee generation!
+	if totalTokens == 0 && !errors.Is(ctx.Err(), context.Canceled) {
+		reply, rpcErr := sm.SendChatMessageWithModel(model, messages, temperature, reasoningEffort)
+		if rpcErr != nil {
+			emitChunk(ChatStreamChunk{
+				SessionID: sessionID,
+				NodeID:    nodeID,
+				Error:     fmt.Sprintf("Failed to generate response: %v", rpcErr),
+				Done:      true,
+			})
+			return rpcErr
+		}
+		emitChunk(ChatStreamChunk{
 			SessionID: sessionID,
+			NodeID:    nodeID,
+			Content:   reply,
 			Done:      true,
 		})
+		return nil
 	}
+
+	emitChunk(ChatStreamChunk{
+		SessionID: sessionID,
+		NodeID:    nodeID,
+		Done:      true,
+	})
 
 	return nil
 }
