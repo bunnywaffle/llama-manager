@@ -2605,18 +2605,22 @@ function setupChat() {
       let details = bubbleEl.querySelector<HTMLDetailsElement>(".reasoning-accordion");
       let body = bubbleEl.querySelector<HTMLElement>(".reasoning-body");
       let answerDiv = bubbleEl.querySelector<HTMLElement>(".chat-answer-body");
+      let summaryText = bubbleEl.querySelector<HTMLElement>(".reasoning-summary-text");
+      let summaryIcon = bubbleEl.querySelector<HTMLElement>(".reasoning-summary-icon");
 
       if (!details) {
         bubbleEl.innerHTML = "";
         details = document.createElement("details");
         details.className = "reasoning-accordion";
+        // Auto-open accordion during streaming or if there is no separate answer text yet
+        details.open = isStreaming || !parsed.answer;
 
         const summary = document.createElement("summary");
         summary.className = "reasoning-summary";
         summary.innerHTML = `
           <div class="reasoning-summary-left">
-            <i data-lucide="brain"></i>
-            <span>Thought Process</span>
+            <span class="reasoning-summary-icon"><i data-lucide="brain" class="${isStreaming && !parsed.answer ? 'reasoning-brain-pulsing' : ''}"></i></span>
+            <span class="reasoning-summary-text">${isStreaming && !parsed.answer ? "Thinking..." : "Thought Process"}</span>
           </div>
           <i data-lucide="chevron-right" class="reasoning-chevron"></i>
         `;
@@ -2632,6 +2636,39 @@ function setupChat() {
 
       if (body) {
         body.textContent = parsed.reasoning;
+        if (isStreaming) {
+          body.scrollTop = body.scrollHeight;
+        }
+      }
+
+      // Update summary header text & pulse icon dynamically
+      if (summaryText && summaryIcon) {
+        if (isStreaming && !parsed.answer) {
+          if (summaryText.textContent !== "Thinking...") {
+            summaryText.textContent = "Thinking...";
+            summaryIcon.innerHTML = `<i data-lucide="brain" class="reasoning-brain-pulsing"></i>`;
+            renderIcons();
+          }
+          if (!details.hasAttribute("data-user-toggled")) {
+            details.open = true;
+          }
+        } else {
+          if (summaryText.textContent !== "Thought Process") {
+            summaryText.textContent = "Thought Process";
+            summaryIcon.innerHTML = `<i data-lucide="brain"></i>`;
+            renderIcons();
+          }
+          if (!isStreaming && parsed.answer && !details.hasAttribute("data-user-toggled")) {
+            details.open = false;
+          }
+        }
+      }
+
+      if (details && !details.hasAttribute("data-listener-attached")) {
+        details.setAttribute("data-listener-attached", "true");
+        details.addEventListener("toggle", () => {
+          details.setAttribute("data-user-toggled", "true");
+        });
       }
 
       if (!answerDiv) {
@@ -2641,16 +2678,19 @@ function setupChat() {
       }
 
       if (parsed.answer) {
+        answerDiv.style.display = "";
         answerDiv.className = "chat-answer-body";
         answerDiv.innerHTML = renderMarkdown(parsed.answer);
         renderIcons();
       } else {
         if (isStreaming) {
-          answerDiv.className = "chat-answer-body chat-answer-empty";
-          answerDiv.textContent = "Thinking...";
+          // While thoughts are actively streaming, don't show a redundant/confusing "Thinking..." underneath the open thoughts!
+          answerDiv.style.display = "none";
         } else {
+          // Streaming finished and model only output reasoning
+          answerDiv.style.display = "";
           answerDiv.className = "chat-answer-body chat-answer-empty";
-          answerDiv.textContent = "(Reasoning complete)";
+          answerDiv.textContent = "";
         }
       }
     } else {
@@ -2662,7 +2702,16 @@ function setupChat() {
         bubbleEl.innerHTML = renderMarkdown(content);
         renderIcons();
       } else if (isStreaming) {
-        bubbleEl.textContent = "Thinking...";
+        bubbleEl.innerHTML = `
+          <div class="chat-thinking-indicator">
+            <span class="chat-thinking-dots">
+              <span class="chat-thinking-dot"></span>
+              <span class="chat-thinking-dot"></span>
+              <span class="chat-thinking-dot"></span>
+            </span>
+            <span>Thinking...</span>
+          </div>
+        `;
       } else {
         bubbleEl.textContent = "";
       }
@@ -3002,6 +3051,8 @@ function setupChat() {
         clearTimeout(activeStreamingTimeout);
         activeStreamingTimeout = null;
       }
+      activeStreamingSessionId = "";
+      activeStreamingNodeId = "";
       if (targetNode && targetNode.role === "assistant") {
         targetNode.content = fullText;
         saveSession(session);
@@ -3010,9 +3061,9 @@ function setupChat() {
           renderStage();
           setGeneratingState(false);
         }
+      } else if (isCurrent) {
+        setGeneratingState(false);
       }
-      activeStreamingSessionId = "";
-      activeStreamingNodeId = "";
     }
   });
 
@@ -3098,11 +3149,11 @@ function setupChat() {
     const modelArg = routerCheck && routerCheck.checked && routerSelect && routerSelect.value ? routerSelect.value : "";
     const reasoningEffort = reasoningSelect ? reasoningSelect.value : (currentSession.reasoningEffort || "default");
 
-    // Fallback safety timeout: if no stream tokens are delivered within 10 seconds, fallback automatically to non-streaming RPC
+    // Fallback safety timeout: if no stream tokens are delivered within 35 seconds, fallback automatically to non-streaming RPC
     if (activeStreamingTimeout) clearTimeout(activeStreamingTimeout);
     activeStreamingTimeout = setTimeout(async () => {
       if (activeStreamingSessionId === currentSession.id && (!activeContentText && !activeReasoningText)) {
-        console.warn("No stream chunks received within 10s, initiating non-streaming fallback...");
+        console.warn("No stream chunks received within 35s, initiating non-streaming fallback...");
         try {
           const reply = modelArg
             ? await LlamaService.sendChatWithModel(modelArg, messagesToSend, tempVal, reasoningEffort)
@@ -3122,7 +3173,7 @@ function setupChat() {
           activeStreamingNodeId = "";
         }
       }
-    }, 10000);
+    }, 35000);
 
     try {
       // Stream directly via Go backend (100% OS-agnostic across Linux, macOS, and Windows)

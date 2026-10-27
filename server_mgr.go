@@ -1050,8 +1050,9 @@ func (sm *ServerManager) StreamChatMessage(win *mygo.Window, sessionID string, n
 	emitChunk := func(c ChatStreamChunk) {
 		if win != nil {
 			_ = ChatChunkEvent.Emit(win, c)
+		} else {
+			_ = ChatChunkEvent.Broadcast(c)
 		}
-		_ = ChatChunkEvent.Broadcast(c)
 	}
 
 	sm.mu.Lock()

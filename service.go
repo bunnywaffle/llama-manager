@@ -1,6 +1,7 @@
 package main
 
 import (
+	"log"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -768,16 +769,7 @@ func (s *LlamaService) StreamChat(sessionId string, nodeId string, model string,
 	go func() {
 		err := s.serverMgr.StreamChatMessage(win, sessionId, nodeId, model, messages, temperature, reasoningEffort)
 		if err != nil {
-			chunk := ChatStreamChunk{
-				SessionID: sessionId,
-				NodeID:    nodeId,
-				Done:      true,
-				Error:     err.Error(),
-			}
-			if win != nil {
-				_ = ChatChunkEvent.Emit(win, chunk)
-			}
-			_ = ChatChunkEvent.Broadcast(chunk)
+			log.Printf("[StreamChat] Error in stream session %s: %v", sessionId, err)
 		}
 	}()
 	return nil
