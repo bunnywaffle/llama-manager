@@ -2961,6 +2961,8 @@ function setupChat() {
       return;
     }
     regenerateAssistantNode(currentSession, assistantNode.id);
+    saveSession(currentSession);
+    renderSessions();
     renderStage();
     await triggerAssistantGeneration();
   }
@@ -2991,20 +2993,28 @@ function setupChat() {
 
   // Subscribe to Go-driven chat stream events (100% OS-agnostic across Linux, macOS, and Windows)
   events.chatChunk.on((chunk) => {
-    const session = sessions.find((s) => s.id === chunk.sessionId) || currentSession;
+    // Prioritize active in-memory session if sessionId matches, avoiding stale localStorage lookups
+    const session = (currentSession && currentSession.id === chunk.sessionId)
+      ? currentSession
+      : (sessions.find((s) => s.id === chunk.sessionId) || currentSession);
     const isCurrent = session.id === currentSession.id;
 
-    const path = getActiveConversationPath(session);
-    const last = path[path.length - 1];
     const targetNodeId = chunk.nodeId || activeStreamingNodeId;
-    const targetNode = (targetNodeId && session.nodes[targetNodeId]) ? session.nodes[targetNodeId] : last;
+    let targetNode = (targetNodeId && session.nodes[targetNodeId]) ? session.nodes[targetNodeId] : undefined;
+    if (!targetNode) {
+      const path = getActiveConversationPath(session);
+      const last = path[path.length - 1];
+      if (last && last.role === "assistant") {
+        targetNode = last;
+      }
+    }
 
     if (chunk.error) {
       if (activeStreamingTimeout) {
         clearTimeout(activeStreamingTimeout);
         activeStreamingTimeout = null;
       }
-      if (targetNode && targetNode.role === "assistant") {
+      if (targetNode) {
         targetNode.content = `Error: ${chunk.error}`;
         saveSession(session);
         if (isCurrent) renderStage();
@@ -3035,15 +3045,19 @@ function setupChat() {
       fullText = `<think>\n${activeReasoningText}\n</think>\n${activeContentText}`;
     }
 
-    if (targetNode && targetNode.role === "assistant") {
+    if (targetNode) {
       targetNode.content = fullText;
-      if (isCurrent) {
-        const bubbleEl = document.querySelector<HTMLElement>(`#chat-node-${targetNode.id} .chat-entry`);
-        if (bubbleEl) {
-          renderBubbleContent(bubbleEl, fullText, true);
-        }
-        container.scrollTop = container.scrollHeight;
+    }
+
+    if (isCurrent) {
+      // Find bubble by targetNode id, activeStreamingNodeId, or fallback to the latest assistant bubble in DOM
+      const bubbleEl = (targetNode ? document.querySelector<HTMLElement>(`#chat-node-${targetNode.id} .chat-entry`) : null)
+        || (activeStreamingNodeId ? document.querySelector<HTMLElement>(`#chat-node-${activeStreamingNodeId} .chat-entry`) : null)
+        || document.querySelector<HTMLElement>(`.chat-entry-wrapper.assistant:last-child .chat-entry`);
+      if (bubbleEl) {
+        renderBubbleContent(bubbleEl, fullText, true);
       }
+      container.scrollTop = container.scrollHeight;
     }
 
     if (chunk.done) {
@@ -3053,15 +3067,15 @@ function setupChat() {
       }
       activeStreamingSessionId = "";
       activeStreamingNodeId = "";
-      if (targetNode && targetNode.role === "assistant") {
+      if (targetNode) {
         targetNode.content = fullText;
-        saveSession(session);
-        if (isCurrent) {
-          renderSessions();
-          renderStage();
-          setGeneratingState(false);
-        }
-      } else if (isCurrent) {
+      }
+      saveSession(session);
+      if (isCurrent) {
+        renderSessions();
+        renderStage();
+        setGeneratingState(false);
+      } else {
         setGeneratingState(false);
       }
     }
@@ -3097,11 +3111,14 @@ function setupChat() {
     let targetNode: ChatNode;
     if (!activeNode || activeNode.role === "user") {
       targetNode = addMessageToSession(currentSession, "assistant", "");
+      saveSession(currentSession);
+      renderSessions();
       renderStage();
     } else {
       targetNode = activeNode;
       targetNode.content = "";
       saveSession(currentSession);
+      renderSessions();
       renderStage();
     }
 
@@ -3293,6 +3310,7 @@ function setupChat() {
     renderChatImagePreviews();
 
     addMessageToSession(currentSession, "user", text, images);
+    saveSession(currentSession);
     renderSessions();
     renderStage();
 
