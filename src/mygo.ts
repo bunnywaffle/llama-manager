@@ -53,6 +53,27 @@ export interface ChatStreamChunk {
   error?: string;
 }
 
+export interface DetectedModelParams {
+  architecture: string;
+  blockCount: number;
+  contextLength: number;
+  recommendedContext: number;
+  embeddingLength: number;
+  hasSampling: boolean;
+  temperature?: number;
+  topP?: number;
+  topK?: number;
+  minP?: number;
+  repeatPenalty?: number;
+  ropeFreqBase?: number;
+  ropeScale?: number;
+  hasThinking: boolean;
+  reasoningFormat: string;
+  enableJinja: boolean;
+  mmprojPath?: string;
+  summary: string;
+}
+
 export interface DiagnosticItem {
   /** "executable", "runtime_dlls", "smoke_test", "port", "storage", "gpu" */
   category: string;
@@ -251,6 +272,10 @@ export const LlamaService = {
   activateVersion(id: string): Promise<void> {
     return call("LlamaService.ActivateVersion", id);
   },
+  /** AutoDetectAndApplyModelConfig inspects GGUF metadata, updates configuration, and optionally auto-saves to model.json. */
+  autoDetectAndApplyModelConfig(modelPath: string, autoSave: boolean): Promise<ServerConfig> {
+    return call("LlamaService.AutoDetectAndApplyModelConfig", modelPath, autoSave);
+  },
   /** AutoDetectMMProj searches for an associated vision projector (mmproj) for a model. */
   autoDetectMMProj(modelPath: string): Promise<string> {
     return call("LlamaService.AutoDetectMMProj", modelPath);
@@ -262,6 +287,10 @@ export const LlamaService = {
   /** DeleteModel removes a local model file. */
   deleteModel(filename: string): Promise<void> {
     return call("LlamaService.DeleteModel", filename);
+  },
+  /** DetectModelParameters inspects a GGUF file and extracts its architecture, context, layers, and sampling metadata. */
+  detectModelParameters(modelPath: string): Promise<DetectedModelParams | null> {
+    return call("LlamaService.DetectModelParameters", modelPath);
   },
   /** DownloadBackend downloads and installs the selected release tag and variant. */
   downloadBackend(tag: string, variant: string): Promise<void> {

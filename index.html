@@ -427,7 +427,11 @@
                   <div class="surface-title"><i data-lucide="sliders-horizontal"></i> Server & Model Parameters</div>
                   <div class="surface-desc">Model-specific runtime parameters saved to individual .json configuration files.</div>
                 </div>
-                <div style="display: flex; gap: 8px; align-items: center;">
+                <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+                  <button type="button" class="btn btn-secondary btn-sm" id="btn-autodetect-config" title="Extract optimal context, GPU layers, sampling parameters, and reasoning format directly from GGUF metadata">
+                    <i data-lucide="sparkles"></i>
+                    <span>Auto-Detect from GGUF</span>
+                  </button>
                   <span class="tag-badge accent" id="config-model-badge" title="Active model configuration file">
                     <i data-lucide="file-json" style="width: 12px; height: 12px; vertical-align: middle;"></i>
                     <span id="config-model-badge-text">Default Config</span>
@@ -455,15 +459,42 @@
                 <div class="surface-desc" style="margin-top: 4px;">Default is 99 (offloads all layers to NVIDIA RTX 3060).</div>
               </div>
 
-              <div class="form-field">
-                <label class="form-label">Context Size (-c)</label>
-                <select class="form-select" id="cfg-context">
-                  <option value="2048">2048 tokens</option>
-                  <option value="4096" selected>4096 tokens (Balanced)</option>
-                  <option value="8192">8192 tokens</option>
-                  <option value="16384">16384 tokens</option>
-                  <option value="32768">32768 tokens (High VRAM)</option>
-                </select>
+              <div class="adv-grid" style="grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); margin-bottom: 16px;">
+                <!-- Context Size Input with Preset Quick Pills -->
+                <div class="form-field" style="margin-bottom: 0;">
+                  <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                    <label class="form-label" style="margin: 0;">Context Size (-c)</label>
+                    <span class="tag-badge accent" id="cfg-native-context-badge" style="display: none;" title="Native context length embedded in GGUF">Native: 262k</span>
+                  </div>
+                  <input type="number" class="form-input" id="cfg-context" step="512" min="512" value="4096" placeholder="4096 tokens" />
+                  <div class="preset-pill-group" id="cfg-context-presets">
+                    <button type="button" class="preset-pill" data-ctx="2048">2K</button>
+                    <button type="button" class="preset-pill active" data-ctx="4096">4K</button>
+                    <button type="button" class="preset-pill" data-ctx="8192">8K</button>
+                    <button type="button" class="preset-pill" data-ctx="16384">16K</button>
+                    <button type="button" class="preset-pill" data-ctx="32768">32K</button>
+                    <button type="button" class="preset-pill" data-ctx="65536">64K</button>
+                    <button type="button" class="preset-pill" data-ctx="131072">128K</button>
+                    <button type="button" class="preset-pill" id="btn-ctx-max-native" style="display: none;" title="Set to model's full native context length">Max Native</button>
+                  </div>
+                </div>
+
+                <!-- Max Tokens / Max Predict Input Field -->
+                <div class="form-field" style="margin-bottom: 0;">
+                  <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                    <label class="form-label" style="margin: 0;">Max Tokens (-n / max_tokens)</label>
+                    <span class="surface-desc" style="font-size: 11px; margin: 0;">-1 = Unlimited</span>
+                  </div>
+                  <input type="number" class="form-input" id="cfg-max-predict" step="128" value="-1" placeholder="-1" title="-1 for unlimited or model default" />
+                  <div class="preset-pill-group" id="cfg-max-predict-presets">
+                    <button type="button" class="preset-pill active" data-max="-1">Unlimited</button>
+                    <button type="button" class="preset-pill" data-max="512">512</button>
+                    <button type="button" class="preset-pill" data-max="1024">1K</button>
+                    <button type="button" class="preset-pill" data-max="2048">2K</button>
+                    <button type="button" class="preset-pill" data-max="4096">4K</button>
+                    <button type="button" class="preset-pill" data-max="8192">8K</button>
+                  </div>
+                </div>
               </div>
 
               <div class="form-field">
@@ -559,10 +590,7 @@
                         <label class="form-label">Frequency Penalty</label>
                         <input type="number" class="form-input" id="cfg-frequency-penalty" step="0.1" value="0.0" />
                       </div>
-                      <div class="form-field" style="margin-bottom: 0;">
-                        <label class="form-label">Max Predict (-n)</label>
-                        <input type="number" class="form-input" id="cfg-max-predict" step="1" value="-1" title="-1 for unlimited/model default" />
-                      </div>
+
                       <div class="form-field" style="margin-bottom: 0;">
                         <label class="form-label">Seed (--seed)</label>
                         <input type="number" class="form-input" id="cfg-seed" step="1" value="-1" title="-1 for random seed" />
@@ -721,6 +749,10 @@
                 <button class="btn btn-primary" id="btn-save-config">
                   <i data-lucide="check-circle"></i>
                   <span>Save Configuration</span>
+                </button>
+                <button type="button" class="btn btn-secondary" id="btn-autodetect-config-bottom">
+                  <i data-lucide="sparkles"></i>
+                  <span>Auto-Detect from GGUF</span>
                 </button>
                 <span class="surface-desc" id="config-save-hint" style="margin: 0; font-size: 12px;">Saves to this model's personal .json configuration file.</span>
               </div>

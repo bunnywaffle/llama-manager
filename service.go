@@ -707,6 +707,17 @@ func (s *LlamaService) SaveServerConfig(cfg ServerConfig) error {
 	return nil
 }
 
+// DetectModelParameters inspects a GGUF file and extracts its architecture, context, layers, and sampling metadata.
+func (s *LlamaService) DetectModelParameters(modelPath string) (*DetectedModelParams, error) {
+	return s.serverMgr.DetectModelParameters(modelPath)
+}
+
+// AutoDetectAndApplyModelConfig inspects GGUF metadata, updates configuration, and optionally auto-saves to model.json.
+func (s *LlamaService) AutoDetectAndApplyModelConfig(modelPath string, autoSave bool) (ServerConfig, error) {
+	cfg, _, err := s.serverMgr.AutoDetectAndApplyModelConfig(modelPath, autoSave)
+	return cfg, err
+}
+
 // StartServer launches the server executable with the specified configuration.
 func (s *LlamaService) StartServer(cfg ServerConfig) error {
 	if cfg.RouterMode && cfg.ModelsDir == "" {

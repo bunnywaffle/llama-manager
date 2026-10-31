@@ -300,3 +300,33 @@ func TestRealStartServerIfExists(t *testing.T) {
 
 
 
+func TestExtractModelParameters(t *testing.T) {
+	modelPath := `E:\LLM\LLamaManager\FrogNano-4B-2609-Q6_K_L.gguf`
+	if _, err := os.Stat(modelPath); err != nil {
+		t.Skip("skipping GGUF test: local model not present")
+	}
+
+	params, err := ExtractModelParameters(modelPath)
+	if err != nil {
+		t.Fatalf("ExtractModelParameters failed: %v", err)
+	}
+
+	if params.BlockCount != 33 {
+		t.Errorf("Expected BlockCount 33, got %d", params.BlockCount)
+	}
+	if params.ContextLength != 262144 {
+		t.Errorf("Expected ContextLength 262144, got %d", params.ContextLength)
+	}
+	if params.Architecture != "qwen35" {
+		t.Errorf("Expected Architecture qwen35, got %s", params.Architecture)
+	}
+	if !params.HasThinking {
+		t.Errorf("Expected HasThinking to be true for FrogNano")
+	}
+	if params.MMProjPath == "" {
+		t.Logf("Notice: MMProjPath was not detected")
+	} else {
+		t.Logf("Detected MMProjPath: %s", params.MMProjPath)
+	}
+	t.Logf("Extracted Summary: %s", params.Summary)
+}

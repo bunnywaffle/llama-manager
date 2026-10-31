@@ -747,7 +747,7 @@ function collectConfigFromUI(overrideModelPath?: string): ServerConfig {
     host: $<HTMLInputElement>("#cfg-host").value || "127.0.0.1",
     port: Number($<HTMLInputElement>("#quick-port").value || 8080),
     gpuLayers: Number($<HTMLInputElement>("#cfg-gpu-layers").value || 99),
-    contextSize: Number($<HTMLSelectElement>("#cfg-context").value || 4096),
+    contextSize: Number($<HTMLInputElement>("#cfg-context")?.value || 4096),
     threads: Number($<HTMLInputElement>("#cfg-threads").value || 6),
     batchSize: Number($<HTMLInputElement>("#cfg-batch")?.value || 512),
     flashAttention: $<HTMLInputElement>("#cfg-flash-attn").checked,
@@ -837,6 +837,28 @@ function updateRouterModeUI(enabled: boolean) {
   }
 }
 
+function updateContextPresetPills(val: number) {
+  document.querySelectorAll<HTMLButtonElement>("#cfg-context-presets .preset-pill").forEach((pill) => {
+    const pillVal = Number(pill.getAttribute("data-ctx"));
+    if (pillVal === val) {
+      pill.classList.add("active");
+    } else {
+      pill.classList.remove("active");
+    }
+  });
+}
+
+function updateMaxPredictPresetPills(val: number) {
+  document.querySelectorAll<HTMLButtonElement>("#cfg-max-predict-presets .preset-pill").forEach((pill) => {
+    const pillVal = Number(pill.getAttribute("data-max"));
+    if (pillVal === val) {
+      pill.classList.add("active");
+    } else {
+      pill.classList.remove("active");
+    }
+  });
+}
+
 function applyConfigToUI(cfg: ServerConfig) {
   if (cfg.host) {
     const hostEl = $<HTMLInputElement>("#cfg-host");
@@ -857,8 +879,9 @@ function applyConfigToUI(cfg: ServerConfig) {
     if (badge) badge.textContent = String(cfg.gpuLayers);
   }
   if (cfg.contextSize) {
-    const ctx = $<HTMLSelectElement>("#cfg-context");
+    const ctx = $<HTMLInputElement>("#cfg-context");
     if (ctx) ctx.value = String(cfg.contextSize);
+    updateContextPresetPills(cfg.contextSize);
   }
   if (cfg.threads !== undefined) {
     const threads = $<HTMLInputElement>("#cfg-threads");
@@ -925,6 +948,7 @@ function applyConfigToUI(cfg: ServerConfig) {
   if (cfg.maxPredict !== undefined) {
     const el = $<HTMLInputElement>("#cfg-max-predict");
     if (el) el.value = String(cfg.maxPredict);
+    updateMaxPredictPresetPills(cfg.maxPredict);
   }
   if (cfg.seed !== undefined) {
     const el = $<HTMLInputElement>("#cfg-seed");
@@ -1031,11 +1055,121 @@ function applyConfigToUI(cfg: ServerConfig) {
   updateConfigModelBadge(cfg.modelPath);
 }
 
+async function handleAutoDetectConfig() {
+  const quickSelect = $<HTMLSelectElement>("#quick-model-select");
+  const modelPath = quickSelect?.value || "";
+  if (!modelPath) {
+    showToast("Please select a model on the Overview or Configuration tab first.", "warning", "No Model Selected");
+    return;
+  }
+
+  try {
+    showToast("Reading GGUF metadata...", "info", "Inspecting Model");
+    const params = await LlamaService.detectModelParameters(modelPath);
+    if (!params) {
+      showToast("Could not extract GGUF metadata from the selected file.", "error", "Detection Failed");
+      return;
+    }
+
+    // Apply detected parameters to the UI controls
+    if (params.blockCount > 0) {
+      const gpuInput = $<HTMLInputElement>("#cfg-gpu-layers");
+      if (gpuInput) gpuInput.value = String(params.blockCount);
+      const valBadge = $("#cfg-gpu-layers-val");
+      if (valBadge) valBadge.textContent = String(params.blockCount);
+    }
+
+    if (params.recommendedContext > 0) {
+      const ctxInput = $<HTMLInputElement>("#cfg-context");
+      if (ctxInput) {
+        ctxInput.value = String(params.recommendedContext);
+        updateContextPresetPills(params.recommendedContext);
+      }
+    }
+
+    // Show native context badge and Max Native button if contextLength > 0
+    const nativeCtxBadge = $("#cfg-native-context-badge");
+    const btnMaxNative = $<HTMLButtonElement>("#btn-ctx-max-native");
+    if (nativeCtxBadge && params.contextLength > 0) {
+      const formatted = params.contextLength >= 1024 ? `${Math.round(params.contextLength / 1024)}k` : `${params.contextLength}`;
+      nativeCtxBadge.textContent = `Native: ${formatted}`;
+      nativeCtxBadge.style.display = "inline-block";
+    }
+    if (btnMaxNative && params.contextLength > 0) {
+      btnMaxNative.style.display = "inline-block";
+      btnMaxNative.setAttribute("data-ctx", String(params.contextLength));
+    }
+
+    if (params.temperature !== undefined && params.temperature !== null) {
+      const tempInput = $<HTMLInputElement>("#cfg-temp");
+      if (tempInput) tempInput.value = String(params.temperature);
+    }
+    if (params.topP !== undefined && params.topP !== null) {
+      const topPInput = $<HTMLInputElement>("#cfg-top-p");
+      if (topPInput) topPInput.value = String(params.topP);
+    }
+    if (params.topK !== undefined && params.topK !== null) {
+      const topKInput = $<HTMLInputElement>("#cfg-top-k");
+      if (topKInput) topKInput.value = String(params.topK);
+    }
+    if (params.minP !== undefined && params.minP !== null) {
+      const minPInput = $<HTMLInputElement>("#cfg-min-p");
+      if (minPInput) minPInput.value = String(params.minP);
+    }
+    if (params.repeatPenalty !== undefined && params.repeatPenalty !== null) {
+      const repInput = $<HTMLInputElement>("#cfg-repeat-penalty");
+      if (repInput) repInput.value = String(params.repeatPenalty);
+    }
+
+    if (params.ropeFreqBase && params.ropeFreqBase > 0) {
+      const ropeInput = $<HTMLInputElement>("#cfg-rope-freq-base");
+      if (ropeInput) ropeInput.value = String(params.ropeFreqBase);
+    }
+    if (params.ropeScale && params.ropeScale > 0) {
+      const scaleInput = $<HTMLInputElement>("#cfg-rope-scale");
+      if (scaleInput) scaleInput.value = String(params.ropeScale);
+    }
+
+    if (params.enableJinja) {
+      const jinjaCheck = $<HTMLInputElement>("#cfg-enable-jinja");
+      if (jinjaCheck) jinjaCheck.checked = true;
+    }
+    if (params.reasoningFormat && params.reasoningFormat !== "none") {
+      const reasoningSelect = $<HTMLSelectElement>("#cfg-reasoning-format");
+      if (reasoningSelect) reasoningSelect.value = params.reasoningFormat;
+    }
+
+    if (params.mmprojPath) {
+      const mmprojInput = $<HTMLInputElement>("#cfg-mmproj");
+      if (mmprojInput) {
+        mmprojInput.value = params.mmprojPath;
+        updateLinkedModelsBadge();
+      }
+    }
+
+    // Auto-save to model's .json configuration file
+    const currentCfg = collectConfigFromUI(modelPath);
+    await LlamaService.saveModelConfig(modelPath, currentCfg);
+    updateConfigModelBadge(modelPath);
+
+    showToast(
+      params.summary,
+      "success",
+      `Loaded & Saved: ${params.architecture.toUpperCase()}`
+    );
+  } catch (err: any) {
+    console.error("Auto-detect failed:", err);
+    showToast(err.message || String(err), "error", "Detection Failed");
+  }
+}
+
 async function loadConfigForModel(modelPath: string) {
   if (!modelPath) {
     updateConfigModelBadge("");
     return;
   }
+  updateConfigModelBadge(modelPath);
+
   try {
     const cfg = await LlamaService.getModelConfig(modelPath);
     applyConfigToUI(cfg);
@@ -1048,10 +1182,31 @@ async function loadConfigForModel(modelPath: string) {
         if (detected) {
           mmprojInput.value = detected;
           updateLinkedModelsBadge();
-          showToast(`Auto-linked vision projector: ${detected.split(/[/\\]/).pop()}`, "info", "Vision Projector Found");
+          showToast(`Auto-linked vision projector: ${detected.split(/[\/\\]/).pop()}`, "info", "Vision Projector Found");
         }
       } catch {}
     }
+
+    // Inspect GGUF in background to update native context badge and Max Native button
+    try {
+      const params = await LlamaService.detectModelParameters(modelPath);
+      const nativeCtxBadge = $("#cfg-native-context-badge");
+      const btnMaxNative = $<HTMLButtonElement>("#btn-ctx-max-native");
+      if (params && params.contextLength > 0) {
+        if (nativeCtxBadge) {
+          const formatted = params.contextLength >= 1024 ? `${Math.round(params.contextLength / 1024)}k` : `${params.contextLength}`;
+          nativeCtxBadge.textContent = `Native: ${formatted}`;
+          nativeCtxBadge.style.display = "inline-block";
+        }
+        if (btnMaxNative) {
+          btnMaxNative.style.display = "inline-block";
+          btnMaxNative.setAttribute("data-ctx", String(params.contextLength));
+        }
+      } else {
+        if (nativeCtxBadge) nativeCtxBadge.style.display = "none";
+        if (btnMaxNative) btnMaxNative.style.display = "none";
+      }
+    } catch {}
   } catch (err) {
     console.error("Failed to load model config for", modelPath, err);
   }
@@ -1343,7 +1498,7 @@ function setupActions() {
     try {
       if (cfg.modelPath) {
         await LlamaService.saveModelConfig(cfg.modelPath, cfg);
-        const fileName = cfg.modelPath.split(/[/\\]/).pop()?.replace(/\.gguf$/i, "") + ".json";
+        const fileName = cfg.modelPath.split(/[\/\\]/).pop()?.replace(/\.gguf$/i, "") + ".json";
         showToast(`Saved parameters to ${fileName}`, "success", "Model Config Saved");
       } else {
         await LlamaService.saveServerConfig(cfg);
@@ -1352,6 +1507,44 @@ function setupActions() {
     } catch (err: any) {
       showToast(`Failed to save configuration: ${err.message || err}`, "error", "Save Failed");
     }
+  });
+
+  // Auto-detect GGUF parameters buttons (top & bottom)
+  $("#btn-autodetect-config")?.addEventListener("click", handleAutoDetectConfig);
+  $("#btn-autodetect-config-bottom")?.addEventListener("click", handleAutoDetectConfig);
+
+  // Preset pill listeners for Context Size
+  document.querySelectorAll<HTMLButtonElement>("#cfg-context-presets .preset-pill").forEach((pill) => {
+    pill.addEventListener("click", () => {
+      const val = Number(pill.getAttribute("data-ctx"));
+      const input = $<HTMLInputElement>("#cfg-context");
+      if (input && val > 0) {
+        input.value = String(val);
+        updateContextPresetPills(val);
+      }
+    });
+  });
+
+  $<HTMLInputElement>("#cfg-context")?.addEventListener("input", (e) => {
+    const val = Number((e.target as HTMLInputElement).value);
+    updateContextPresetPills(val);
+  });
+
+  // Preset pill listeners for Max Tokens
+  document.querySelectorAll<HTMLButtonElement>("#cfg-max-predict-presets .preset-pill").forEach((pill) => {
+    pill.addEventListener("click", () => {
+      const val = Number(pill.getAttribute("data-max"));
+      const input = $<HTMLInputElement>("#cfg-max-predict");
+      if (input) {
+        input.value = String(val);
+        updateMaxPredictPresetPills(val);
+      }
+    });
+  });
+
+  $<HTMLInputElement>("#cfg-max-predict")?.addEventListener("input", (e) => {
+    const val = Number((e.target as HTMLInputElement).value);
+    updateMaxPredictPresetPills(val);
   });
 
   $("#btn-clear-logs").addEventListener("click", () => {

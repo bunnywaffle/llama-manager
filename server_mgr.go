@@ -249,6 +249,79 @@ func (sm *ServerManager) GetModelConfig(modelPath string) (ServerConfig, error) 
 	return defaultCfg, nil
 }
 
+// DetectModelParameters inspects the GGUF file and extracts its architecture,
+// layer count, native context length, embedded sampling parameters, and reasoning template.
+func (sm *ServerManager) DetectModelParameters(modelPath string) (*DetectedModelParams, error) {
+	if modelPath == "" {
+		sm.mu.Lock()
+		modelPath = sm.cfg.ModelPath
+		sm.mu.Unlock()
+	}
+	if modelPath == "" {
+		return nil, fmt.Errorf("no model path specified")
+	}
+	return ExtractModelParameters(modelPath)
+}
+
+// AutoDetectAndApplyModelConfig extracts parameters from GGUF and merges them into the model's configuration.
+// If autoSave is true, it immediately writes the updated configuration to the model's .json file.
+func (sm *ServerManager) AutoDetectAndApplyModelConfig(modelPath string, autoSave bool) (ServerConfig, *DetectedModelParams, error) {
+	params, err := sm.DetectModelParameters(modelPath)
+	if err != nil {
+		return ServerConfig{}, nil, err
+	}
+
+	cfg, err := sm.GetModelConfig(modelPath)
+	if err != nil {
+		cfg = getDefaultServerConfig()
+		cfg.ModelPath = modelPath
+	}
+
+	// Apply detected parameters
+	if params.BlockCount > 0 {
+		cfg.GPULayers = params.BlockCount
+	}
+	if params.RecommendedContext > 0 {
+		cfg.ContextSize = params.RecommendedContext
+	}
+	if params.RoPEFreqBase > 0 {
+		cfg.RoPEFreqBase = params.RoPEFreqBase
+	}
+	if params.RoPEScale > 0 {
+		cfg.RoPEScale = params.RoPEScale
+	}
+	if params.Temperature != nil {
+		cfg.Temperature = *params.Temperature
+	}
+	if params.TopP != nil {
+		cfg.TopP = *params.TopP
+	}
+	if params.TopK != nil {
+		cfg.TopK = *params.TopK
+	}
+	if params.MinP != nil {
+		cfg.MinP = *params.MinP
+	}
+	if params.RepeatPenalty != nil {
+		cfg.RepeatPenalty = *params.RepeatPenalty
+	}
+	if params.ReasoningFormat != "" && params.ReasoningFormat != "none" {
+		cfg.ReasoningFormat = params.ReasoningFormat
+	}
+	if params.EnableJinja {
+		cfg.EnableJinja = true
+	}
+	if params.MMProjPath != "" && cfg.MMProjPath == "" {
+		cfg.MMProjPath = params.MMProjPath
+	}
+
+	if autoSave && modelPath != "" {
+		_ = sm.SaveModelConfig(modelPath, cfg)
+	}
+
+	return cfg, params, nil
+}
+
 // saveModelConfigFile writes the model's configuration into its individual JSON file on disk.
 func (sm *ServerManager) saveModelConfigFile(modelPath string, cfg ServerConfig) error {
 	if modelPath == "" {
@@ -942,6 +1015,7 @@ func (sm *ServerManager) SendChatMessageWithModel(model string, messages []ChatM
 	port := sm.cfg.Port
 	running := sm.running
 	defaultEffort := sm.cfg.ReasoningEffort
+	maxPredict := sm.cfg.MaxPredict
 	sm.mu.Unlock()
 
 	if !running {
@@ -955,6 +1029,9 @@ func (sm *ServerManager) SendChatMessageWithModel(model string, messages []ChatM
 	}
 	if model != "" {
 		reqBody["model"] = model
+	}
+	if maxPredict > 0 {
+		reqBody["max_tokens"] = maxPredict
 	}
 
 	effort := strings.TrimSpace(reasoningEffort)
@@ -1060,6 +1137,7 @@ func (sm *ServerManager) StreamChatMessage(win *mygo.Window, sessionID string, n
 	port := sm.cfg.Port
 	running := sm.running
 	defaultEffort := sm.cfg.ReasoningEffort
+	maxPredict := sm.cfg.MaxPredict
 	sm.mu.Unlock()
 
 	if !running {
@@ -1085,6 +1163,9 @@ func (sm *ServerManager) StreamChatMessage(win *mygo.Window, sessionID string, n
 	}
 	if model != "" {
 		reqBody["model"] = model
+	}
+	if maxPredict > 0 {
+		reqBody["max_tokens"] = maxPredict
 	}
 
 	effort := strings.TrimSpace(reasoningEffort)
