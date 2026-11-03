@@ -135,6 +135,13 @@ export interface InstalledVersionInfo {
   isActive: boolean;
 }
 
+/** LoraAdapterConfig represents a LoRA adapter file, scaling factor, and active state. */
+export interface LoraAdapterConfig {
+  path: string;
+  scale: number;
+  enabled: boolean;
+}
+
 /** ModelInfo describes a local GGUF model file. */
 export interface ModelInfo {
   name: string;
@@ -174,6 +181,13 @@ export interface ReleaseInfo {
   publishedAt: string;
   assets: ReleaseAsset[];
   isCurrent: boolean;
+}
+
+/** RuntimeLoraInfo describes a dynamically loaded LoRA adapter from llama-server GET /lora-adapters */
+export interface RuntimeLoraInfo {
+  id: number;
+  path?: string;
+  scale: number;
 }
 
 /** ServerConfig holds the launch configuration parameters for llama-server. */
@@ -232,6 +246,8 @@ export interface ServerConfig {
   reasoningFormat: string;
   reasoningEffort: string;
   enableJinja: boolean;
+  /** LoRA Adapters */
+  loraAdapters: LoraAdapterConfig[];
 }
 
 /** ServerStatus describes the runtime state of the backend. */
@@ -248,6 +264,7 @@ export interface ServerStatus {
   errorMsg?: string;
   hasVision: boolean;
   mmprojPath?: string;
+  loraCount: number;
 }
 
 export interface TroubleshootReport {
@@ -332,6 +349,10 @@ export const LlamaService = {
   getRecentLogs(): Promise<string[]> {
     return call("LlamaService.GetRecentLogs");
   },
+  /** GetRuntimeLoraAdapters retrieves dynamically loaded LoRA adapters from llama-server. */
+  getRuntimeLoraAdapters(): Promise<RuntimeLoraInfo[]> {
+    return call("LlamaService.GetRuntimeLoraAdapters");
+  },
   /** GetServerConfig returns the active server configuration. */
   getServerConfig(): Promise<ServerConfig> {
     return call("LlamaService.GetServerConfig");
@@ -415,6 +436,10 @@ export const LlamaService = {
   /** SetModelsDir updates the models directory path and persists in settings. */
   setModelsDir(dir: string): Promise<void> {
     return call("LlamaService.SetModelsDir", dir);
+  },
+  /** SetRuntimeLoraAdapters sends POST /lora-adapters to dynamically update scales without server restart. */
+  setRuntimeLoraAdapters(adapters: RuntimeLoraInfo[]): Promise<void> {
+    return call("LlamaService.SetRuntimeLoraAdapters", adapters);
   },
   setWindow(win: Window | null): Promise<void> {
     return call("LlamaService.SetWindow", win);

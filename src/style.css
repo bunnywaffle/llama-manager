@@ -2589,3 +2589,113 @@ table.data-table tr:hover td {
   color: var(--accent-primary);
   font-weight: 600;
 }
+
+
+/* LoRA Adapters Manager */
+.lora-adapters-container {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+}
+
+.lora-empty-hint {
+  font-size: 11px;
+  color: var(--text-faint, #52525b);
+  font-style: italic;
+  padding: 6px 2px;
+}
+
+.lora-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  background: var(--bg-surface-elevated, rgba(255, 255, 255, 0.03));
+  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
+  border-radius: var(--radius-sm, 6px);
+  padding: 6px 10px;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+
+.lora-row:hover {
+  border-color: var(--border-hover, rgba(255, 255, 255, 0.15));
+}
+
+.lora-row-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+}
+
+.lora-row-check {
+  cursor: pointer;
+  accent-color: var(--accent-primary, #38bdf8);
+}
+
+.lora-row-info {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.lora-row-name {
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--text-high);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.lora-row-path {
+  font-size: 10px;
+  color: var(--text-low);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 280px;
+}
+
+.lora-row-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.lora-scale-slider {
+  width: 80px;
+  height: 4px;
+  accent-color: var(--accent-primary, #38bdf8);
+  cursor: pointer;
+}
+
+.lora-scale-badge {
+  font-size: 11px;
+  font-family: var(--font-mono, monospace);
+  color: var(--accent-primary, #38bdf8);
+  min-width: 38px;
+  text-align: right;
+  font-weight: 600;
+}
+
+.lora-row-delete {
+  background: transparent;
+  border: none;
+  color: var(--text-low);
+  cursor: pointer;
+  padding: 3px 5px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s ease;
+}
+
+.lora-row-delete:hover {
+  color: #ef4444;
+  background: rgba(239, 68, 68, 0.12);
+}

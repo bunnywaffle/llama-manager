@@ -786,6 +786,16 @@ func (s *LlamaService) StreamChat(sessionId string, nodeId string, model string,
 	return nil
 }
 
+// GetRuntimeLoraAdapters retrieves dynamically loaded LoRA adapters from llama-server.
+func (s *LlamaService) GetRuntimeLoraAdapters() ([]RuntimeLoraInfo, error) {
+	return s.serverMgr.GetRuntimeLoraAdapters()
+}
+
+// SetRuntimeLoraAdapters sends POST /lora-adapters to dynamically update scales without server restart.
+func (s *LlamaService) SetRuntimeLoraAdapters(adapters []RuntimeLoraInfo) error {
+	return s.serverMgr.SetRuntimeLoraAdapters(adapters)
+}
+
 func migrateDirContents(srcDir, dstDir string) {
 	if srcDir == "" || dstDir == "" || srcDir == dstDir {
 		return

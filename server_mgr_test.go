@@ -330,3 +330,54 @@ func TestExtractModelParameters(t *testing.T) {
 	}
 	t.Logf("Extracted Summary: %s", params.Summary)
 }
+
+
+func TestLoraConfigAndCliArgs(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "llama_lora_test_*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	appData := filepath.Join(tempDir, "appdata")
+	binDir := filepath.Join(tempDir, "bin")
+	_ = os.MkdirAll(appData, 0755)
+	_ = os.MkdirAll(binDir, 0755)
+
+	sm := NewServerManager(binDir, appData)
+
+	fakeModel := filepath.Join(tempDir, "BaseModel.gguf")
+	_ = os.WriteFile(fakeModel, []byte("fake"), 0644)
+
+	fakeLora1 := filepath.Join(tempDir, "adapter1.gguf")
+	_ = os.WriteFile(fakeLora1, []byte("lora1"), 0644)
+
+	fakeLora2 := filepath.Join(tempDir, "adapter2.gguf")
+	_ = os.WriteFile(fakeLora2, []byte("lora2"), 0644)
+
+	cfg := getDefaultServerConfig()
+	cfg.ModelPath = fakeModel
+	cfg.LoraAdapters = []LoraAdapterConfig{
+		{Path: fakeLora1, Scale: 0.8, Enabled: true},
+		{Path: fakeLora2, Scale: 1.5, Enabled: false},
+	}
+
+	// 1. Save and verify persistence
+	if err := sm.SaveModelConfig(fakeModel, cfg); err != nil {
+		t.Fatalf("Failed to save model config: %v", err)
+	}
+
+	loaded, err := sm.GetModelConfig(fakeModel)
+	if err != nil {
+		t.Fatalf("Failed to load model config: %v", err)
+	}
+	if len(loaded.LoraAdapters) != 2 {
+		t.Fatalf("Expected 2 LoRA adapters, got %d", len(loaded.LoraAdapters))
+	}
+	if loaded.LoraAdapters[0].Scale != 0.8 || !loaded.LoraAdapters[0].Enabled {
+		t.Errorf("Unexpected LoraAdapter[0]: %+v", loaded.LoraAdapters[0])
+	}
+	if loaded.LoraAdapters[1].Scale != 1.5 || loaded.LoraAdapters[1].Enabled {
+		t.Errorf("Unexpected LoraAdapter[1]: %+v", loaded.LoraAdapters[1])
+	}
+}

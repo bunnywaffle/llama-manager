@@ -56,6 +56,8 @@ import {
   type ServerConfig,
   type AppSettings,
   type InstalledVersionInfo,
+  type LoraAdapterConfig,
+  type RuntimeLoraInfo,
 } from "./mygo";
 import { showToast, showConfirm, initNativeContextMenu } from "./ui_native";
 import {
@@ -805,23 +807,180 @@ function collectConfigFromUI(overrideModelPath?: string): ServerConfig {
     reasoningFormat: $<HTMLSelectElement>("#cfg-reasoning-format")?.value || "deepseek-legacy",
     reasoningEffort: $<HTMLSelectElement>("#cfg-reasoning-effort")?.value || "default",
     enableJinja: $<HTMLInputElement>("#cfg-enable-jinja")?.checked ?? true,
+
+    // LoRA Adapters
+    loraAdapters: [...activeLoraAdapters],
   };
 }
+let activeLoraAdapters: LoraAdapterConfig[] = [];
+let loraDebounceTimer: any = null;
+
+function renderLoraAdapters() {
+  const containers = [
+    document.querySelector<HTMLElement>("#lora-list-overview"),
+    document.querySelector<HTMLElement>("#lora-list-config"),
+  ];
+
+  containers.forEach((container) => {
+    if (!container) return;
+    container.innerHTML = "";
+
+    if (activeLoraAdapters.length === 0) {
+      const empty = document.createElement("div");
+      empty.className = "lora-empty-hint";
+      empty.textContent = "No LoRA adapters attached. Click Add LoRA to link one.";
+      container.appendChild(empty);
+      return;
+    }
+
+    activeLoraAdapters.forEach((lora, idx) => {
+      const row = document.createElement("div");
+      row.className = "lora-row";
+
+      const left = document.createElement("div");
+      left.className = "lora-row-left";
+
+      const check = document.createElement("input");
+      check.type = "checkbox";
+      check.className = "lora-row-check";
+      check.checked = lora.enabled;
+      check.title = lora.enabled ? "Disable LoRA adapter" : "Enable LoRA adapter";
+      check.addEventListener("change", () => {
+        lora.enabled = check.checked;
+        updateLinkedModelsBadge();
+        saveCurrentModelConfigDebounced();
+        syncRuntimeLoraDebounced();
+      });
+
+      const info = document.createElement("div");
+      info.className = "lora-row-info";
+
+      const fileName = lora.path.split(/[\\/\\\\]/).pop() || lora.path;
+      const name = document.createElement("div");
+      name.className = "lora-row-name";
+      name.textContent = fileName;
+      name.title = lora.path;
+
+      const pathEl = document.createElement("div");
+      pathEl.className = "lora-row-path";
+      pathEl.textContent = lora.path;
+      pathEl.title = lora.path;
+
+      info.appendChild(name);
+      info.appendChild(pathEl);
+
+      left.appendChild(check);
+      left.appendChild(info);
+
+      const right = document.createElement("div");
+      right.className = "lora-row-right";
+
+      const slider = document.createElement("input");
+      slider.type = "range";
+      slider.min = "0.0";
+      slider.max = "2.0";
+      slider.step = "0.05";
+      const scaleVal = lora.scale !== undefined && lora.scale >= 0 ? lora.scale : 1.0;
+      slider.value = String(scaleVal);
+      slider.className = "lora-scale-slider";
+      slider.title = `Scale: ${scaleVal.toFixed(2)}x`;
+
+      const badge = document.createElement("span");
+      badge.className = "lora-scale-badge";
+      badge.textContent = `${scaleVal.toFixed(2)}x`;
+
+      slider.addEventListener("input", () => {
+        const val = parseFloat(slider.value);
+        lora.scale = val;
+        badge.textContent = `${val.toFixed(2)}x`;
+        slider.title = `Scale: ${val.toFixed(2)}x`;
+        saveCurrentModelConfigDebounced();
+        syncRuntimeLoraDebounced();
+      });
+
+      const delBtn = document.createElement("button");
+      delBtn.type = "button";
+      delBtn.className = "lora-row-delete";
+      delBtn.title = "Remove LoRA adapter";
+      delBtn.innerHTML = `<i data-lucide="x"></i>`;
+      delBtn.addEventListener("click", () => {
+        activeLoraAdapters.splice(idx, 1);
+        renderLoraAdapters();
+        updateLinkedModelsBadge();
+        saveCurrentModelConfigDebounced();
+        syncRuntimeLoraDebounced();
+      });
+
+      right.appendChild(slider);
+      right.appendChild(badge);
+      right.appendChild(delBtn);
+
+      row.appendChild(left);
+      row.appendChild(right);
+      container.appendChild(row);
+    });
+  });
+
+  renderIcons();
+}
+
+function saveCurrentModelConfigDebounced() {
+  const quickSelect = $<HTMLSelectElement>("#quick-model-select");
+  const currentModel = quickSelect?.value;
+  if (currentModel) {
+    const cfg = collectConfigFromUI(currentModel);
+    LlamaService.saveModelConfig(currentModel, cfg).catch(console.error);
+  }
+}
+
+function syncRuntimeLoraDebounced() {
+  if (!isServerRunning) return;
+  if (loraDebounceTimer) clearTimeout(loraDebounceTimer);
+  loraDebounceTimer = setTimeout(async () => {
+    try {
+      const serverLoras = await LlamaService.getRuntimeLoraAdapters();
+      if (!serverLoras || serverLoras.length === 0) return;
+
+      const updates: RuntimeLoraInfo[] = [];
+      serverLoras.forEach((sl) => {
+        const matched = activeLoraAdapters.find((al) => {
+          if (!sl.path) return true;
+          return al.path.toLowerCase().endsWith(sl.path.toLowerCase()) ||
+                 sl.path.toLowerCase().endsWith(al.path.toLowerCase());
+        });
+        if (matched) {
+          const effectiveScale = matched.enabled ? (matched.scale ?? 1.0) : 0.0;
+          updates.push({ id: sl.id, scale: effectiveScale });
+        }
+      });
+
+      if (updates.length > 0) {
+        await LlamaService.setRuntimeLoraAdapters(updates);
+        showToast("Live LoRA scale hot-swapped.", "info", "LoRA Hot-Swap");
+      }
+    } catch (err: any) {
+      console.warn("Could not sync runtime LoRA scales:", err);
+    }
+  }, 200);
+}
+
 
 function updateLinkedModelsBadge() {
   const meta = document.querySelector<HTMLElement>("#dash-linked-meta");
   if (!meta) return;
   const mm = document.querySelector<HTMLInputElement>("#cfg-mmproj")?.value.trim();
   const dm = document.querySelector<HTMLInputElement>("#cfg-draft-model")?.value.trim();
+  const loraActiveCount = activeLoraAdapters.filter((l) => l.enabled && l.path.trim()).length;
 
-  if (mm && dm) {
-    meta.textContent = "Vision + Drafter (MTP) active";
-    meta.style.color = "var(--text-high)";
-  } else if (mm) {
-    meta.textContent = "Vision active";
-    meta.style.color = "var(--text-high)";
-  } else if (dm) {
-    meta.textContent = "Drafter (MTP) active";
+  const parts: string[] = [];
+  if (mm) parts.push("Vision");
+  if (dm) parts.push("Drafter (MTP)");
+  if (loraActiveCount > 0) {
+    parts.push(loraActiveCount === 1 ? "1 LoRA" : `${loraActiveCount} LoRAs`);
+  }
+
+  if (parts.length > 0) {
+    meta.textContent = parts.join(" + ") + " active";
     meta.style.color = "var(--text-high)";
   } else {
     meta.textContent = "None active";
@@ -1050,6 +1209,10 @@ function applyConfigToUI(cfg: ServerConfig) {
 
   const rJinja = document.querySelector<HTMLInputElement>("#cfg-enable-jinja");
   if (rJinja && cfg.enableJinja !== undefined) rJinja.checked = cfg.enableJinja;
+
+  // LoRA Adapters
+  activeLoraAdapters = (cfg.loraAdapters && Array.isArray(cfg.loraAdapters)) ? [...cfg.loraAdapters] : [];
+  renderLoraAdapters();
 
   updateLinkedModelsBadge();
   updateConfigModelBadge(cfg.modelPath);
@@ -1478,6 +1641,38 @@ function setupActions() {
     updateLinkedModelsBadge();
     showToast("Cleared drafter model link.", "info");
   });
+
+  // LoRA Adapters Add Handlers
+  async function handleAddLora() {
+    try {
+      const selected = await LlamaService.selectFileDialog("Select LoRA Adapter (GGUF)", "LoRA Adapter GGUF", "gguf");
+      if (selected) {
+        const existing = activeLoraAdapters.find((l) => l.path === selected);
+        if (existing) {
+          showToast(`LoRA adapter "${selected.split(/[\\/\\\\]/).pop()}" is already attached.`, "info", "Already Attached");
+          return;
+        }
+        activeLoraAdapters.push({
+          path: selected,
+          scale: 1.0,
+          enabled: true,
+        });
+        renderLoraAdapters();
+        updateLinkedModelsBadge();
+        saveCurrentModelConfigDebounced();
+        if (isServerRunning) {
+          showToast(`Attached "${selected.split(/[\\/\\\\]/).pop()}". Restart server to load weights into memory.`, "info", "LoRA Added");
+        } else {
+          showToast(`Attached LoRA adapter: ${selected.split(/[\\/\\\\]/).pop()}`, "success", "LoRA Attached");
+        }
+      }
+    } catch (err: any) {
+      showToast(`Failed to select LoRA adapter: ${err.message || err}`, "error", "Select Error");
+    }
+  }
+
+  $("#btn-add-lora-overview")?.addEventListener("click", handleAddLora);
+  $("#btn-add-lora-config")?.addEventListener("click", handleAddLora);
 
   $("#btn-dash-start")?.addEventListener("click", startServerHandler);
   $("#btn-dash-stop")?.addEventListener("click", stopServerHandler);

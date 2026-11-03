@@ -86,6 +86,23 @@ type ServerConfig struct {
 	ReasoningFormat string `json:"reasoningFormat"`
 	ReasoningEffort string `json:"reasoningEffort"`
 	EnableJinja     bool   `json:"enableJinja"`
+
+	// LoRA Adapters
+	LoraAdapters []LoraAdapterConfig `json:"loraAdapters"`
+}
+
+// LoraAdapterConfig represents a LoRA adapter file, scaling factor, and active state.
+type LoraAdapterConfig struct {
+	Path    string  `json:"path"`
+	Scale   float64 `json:"scale"`
+	Enabled bool    `json:"enabled"`
+}
+
+// RuntimeLoraInfo describes a dynamically loaded LoRA adapter from llama-server GET /lora-adapters
+type RuntimeLoraInfo struct {
+	ID    int     `json:"id"`
+	Path  string  `json:"path,omitempty"`
+	Scale float64 `json:"scale"`
 }
 
 
@@ -103,6 +120,7 @@ type ServerStatus struct {
 	ErrorMsg      string  `json:"errorMsg,omitempty"`
 	HasVision     bool    `json:"hasVision"`
 	MMProjPath    string  `json:"mmprojPath,omitempty"`
+	LoraCount     int     `json:"loraCount"`
 }
 
 type ServerManager struct {
@@ -151,6 +169,7 @@ func getDefaultServerConfig() ServerConfig {
 		ReasoningFormat:  "deepseek-legacy",
 		ReasoningEffort:  "default",
 		EnableJinja:      true,
+		LoraAdapters:     []LoraAdapterConfig{},
 	}
 }
 
@@ -675,6 +694,25 @@ func (sm *ServerManager) startProcess(cfg ServerConfig) (chan error, string, err
 	}
 
 	// Reasoning & Thinking model arguments (DeepSeek-R1, QwQ, etc.)
+	// LoRA Adapters
+	if len(cfg.LoraAdapters) > 0 {
+		var loraParts []string
+		for _, la := range cfg.LoraAdapters {
+			if la.Enabled && strings.TrimSpace(la.Path) != "" {
+				if _, err := os.Stat(la.Path); err == nil {
+					scale := la.Scale
+					if scale <= 0 {
+						scale = 1.0
+					}
+					loraParts = append(loraParts, fmt.Sprintf("%s:%.2f", la.Path, scale))
+				}
+			}
+		}
+		if len(loraParts) > 0 {
+			args = append(args, "--lora-scaled", strings.Join(loraParts, ","))
+		}
+	}
+
 	if cfg.EnableJinja {
 		args = append(args, "--jinja")
 	}
@@ -857,6 +895,13 @@ func (sm *ServerManager) getStatusLocked() ServerStatus {
 		}
 	}
 
+	activeLoraCount := 0
+	for _, la := range sm.cfg.LoraAdapters {
+		if la.Enabled && strings.TrimSpace(la.Path) != "" {
+			activeLoraCount++
+		}
+	}
+
 	status := ServerStatus{
 		Running:     sm.running,
 		Host:        sm.cfg.Host,
@@ -865,6 +910,7 @@ func (sm *ServerManager) getStatusLocked() ServerStatus {
 		ErrorMsg:    sm.lastError,
 		HasVision:   hasVision,
 		MMProjPath:  sm.cfg.MMProjPath,
+		LoraCount:   activeLoraCount,
 	}
 
 	if sm.running && sm.cmd != nil && sm.cmd.Process != nil {
@@ -1375,6 +1421,80 @@ func (sm *ServerManager) StreamChatMessage(win *mygo.Window, sessionID string, n
 		NodeID:    nodeID,
 		Done:      true,
 	})
+
+	return nil
+}
+
+// GetRuntimeLoraAdapters queries llama-server GET /lora-adapters
+func (sm *ServerManager) GetRuntimeLoraAdapters() ([]RuntimeLoraInfo, error) {
+	sm.mu.Lock()
+	host := sm.cfg.Host
+	port := sm.cfg.Port
+	running := sm.running
+	sm.mu.Unlock()
+
+	if !running {
+		return nil, fmt.Errorf("server is not running")
+	}
+
+	targetHost := host
+	if targetHost == "" || targetHost == "0.0.0.0" {
+		targetHost = "127.0.0.1"
+	}
+	url := fmt.Sprintf("http://%s:%d/lora-adapters", targetHost, port)
+	client := http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Get(url)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get lora adapters: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("llama-server returned HTTP %d: %s", resp.StatusCode, string(b))
+	}
+
+	var adapters []RuntimeLoraInfo
+	if err := json.NewDecoder(resp.Body).Decode(&adapters); err != nil {
+		return nil, fmt.Errorf("failed to decode lora adapters: %w", err)
+	}
+	return adapters, nil
+}
+
+// SetRuntimeLoraAdapters sends POST /lora-adapters to dynamically update scales without server restart
+func (sm *ServerManager) SetRuntimeLoraAdapters(adapters []RuntimeLoraInfo) error {
+	sm.mu.Lock()
+	host := sm.cfg.Host
+	port := sm.cfg.Port
+	running := sm.running
+	sm.mu.Unlock()
+
+	if !running {
+		return fmt.Errorf("server is not running")
+	}
+
+	targetHost := host
+	if targetHost == "" || targetHost == "0.0.0.0" {
+		targetHost = "127.0.0.1"
+	}
+	url := fmt.Sprintf("http://%s:%d/lora-adapters", targetHost, port)
+
+	payload, err := json.Marshal(adapters)
+	if err != nil {
+		return fmt.Errorf("failed to encode lora update: %w", err)
+	}
+
+	client := http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Post(url, "application/json", bytes.NewReader(payload))
+	if err != nil {
+		return fmt.Errorf("failed to post lora adapters: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("llama-server returned HTTP %d: %s", resp.StatusCode, string(b))
+	}
 
 	return nil
 }

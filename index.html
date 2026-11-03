@@ -195,7 +195,7 @@
                 <summary class="adv-summary" style="padding: 6px 12px; font-size: 12px; border-radius: var(--radius-sm); background: var(--bg-surface-elevated, rgba(255,255,255,0.03));">
                   <div class="adv-summary-left">
                     <i data-lucide="layers"></i>
-                    <span style="font-weight: 500;">Vision Projector & Drafter (MTP) Models</span>
+                    <span style="font-weight: 500;">Vision Projector, Drafter (MTP), & LoRA Adapters</span>
                   </div>
                   <span class="adv-summary-meta" id="dash-linked-meta">None active</span>
                 </summary>
@@ -255,6 +255,21 @@
                       <label class="form-label" style="font-size: 10.5px;">Draft GPU Layers (-ngld)</label>
                       <input type="number" class="form-input" id="cfg-draft-layers" value="99" min="0" max="99" style="padding: 4px 8px; font-size: 11px; height: 28px;" />
                     </div>
+                  </div>
+
+                  <!-- LoRA Adapters Subsection -->
+                  <div style="display: flex; flex-direction: column; gap: 6px; margin-top: 6px; padding-top: 8px; border-top: 1px solid var(--border-subtle, rgba(255,255,255,0.06));">
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                      <div>
+                        <label class="form-label" style="font-size: 11px; margin-bottom: 0;">LoRA Adapters (--lora-scaled)</label>
+                        <span style="font-size: 10.5px; color: var(--text-low); display: block;">Per-adapter scale & live runtime hot-swapping</span>
+                      </div>
+                      <button class="btn btn-secondary btn-sm" id="btn-add-lora-overview" style="height: 26px; font-size: 11px; padding: 0 8px;">
+                        <i data-lucide="plus"></i>
+                        <span>Add LoRA</span>
+                      </button>
+                    </div>
+                    <div id="lora-list-overview" class="lora-adapters-container"></div>
                   </div>
                 </div>
               </details>
@@ -736,6 +751,21 @@
                         </label>
                       </div>
                     </div>
+                  </div>
+
+                  <!-- Section 6: LoRA Adapters -->
+                  <div style="margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--border-subtle, rgba(255,255,255,0.06));">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                      <div>
+                        <div class="adv-section-title" style="margin-bottom: 2px;">LoRA Adapters (--lora-scaled)</div>
+                        <span style="font-size: 11.5px; color: var(--text-low);">Attach fine-tuned LoRA adapters in GGUF format with individual scaling factors (0.00 – 2.00x). Supports live hot-swapping at runtime via /lora-adapters.</span>
+                      </div>
+                      <button class="btn btn-secondary btn-sm" id="btn-add-lora-config" type="button">
+                        <i data-lucide="plus"></i>
+                        <span>Add LoRA Adapter...</span>
+                      </button>
+                    </div>
+                    <div id="lora-list-config" class="lora-adapters-container"></div>
                   </div>
                 </div>
               </details>
