@@ -483,17 +483,151 @@ function setupTabs() {
 }
 
 
+let activeExecutionMode: "gpu" | "cpu" | "custom" = "gpu";
+let detectedBlockCount = 0;
+
+function updateGpuPresetActive(layers: number) {
+  document.querySelectorAll<HTMLButtonElement>("#cfg-gpu-presets .preset-pill").forEach((btn) => {
+    const l = btn.getAttribute("data-layers");
+    const pct = btn.getAttribute("data-pct");
+    let match = false;
+    if (l !== null) {
+      const target = Number(l);
+      match = (target === 0 && layers === 0) || (target === 99 && layers >= 99);
+    } else if (pct !== null && detectedBlockCount > 0) {
+      const p = Number(pct);
+      const expected = Math.round((detectedBlockCount * p) / 100);
+      match = Math.abs(layers - expected) <= 1;
+    }
+    btn.classList.toggle("active", match);
+  });
+}
+
+function setExecutionMode(mode: "gpu" | "cpu" | "custom", markDirty = true) {
+  activeExecutionMode = mode;
+
+  // Update segmented control buttons on Configuration tab
+  document.querySelectorAll(".exec-mode-btn").forEach((btn) => {
+    btn.classList.toggle("active", btn.getAttribute("data-mode") === mode);
+  });
+
+  // Update 1-click quick buttons on Overview tab
+  $<HTMLButtonElement>("#btn-quick-mode-gpu")?.classList.toggle("active", mode === "gpu");
+  $<HTMLButtonElement>("#btn-quick-mode-cpu")?.classList.toggle("active", mode === "cpu");
+  $<HTMLButtonElement>("#btn-quick-mode-custom")?.classList.toggle("active", mode === "custom");
+
+  // Update badges
+  const modeLabel = mode === "gpu" ? "GPU Only" : mode === "cpu" ? "CPU Only" : "Custom";
+  const cfgBadge = $<HTMLElement>("#cfg-exec-mode-badge");
+  if (cfgBadge) cfgBadge.textContent = modeLabel;
+  const dashBadge = $<HTMLElement>("#dash-exec-mode-badge");
+  if (dashBadge) dashBadge.textContent = modeLabel;
+
+  const slider = $<HTMLInputElement>("#cfg-gpu-layers");
+  const sliderVal = $<HTMLElement>("#cfg-gpu-layers-val");
+
+  if (mode === "cpu") {
+    if (slider) slider.value = "0";
+    if (sliderVal) sliderVal.textContent = "0 (CPU Only)";
+    updateGpuPresetActive(0);
+  } else if (mode === "gpu") {
+    const maxVal = detectedBlockCount > 0 ? detectedBlockCount : 99;
+    if (slider) slider.value = String(maxVal);
+    if (sliderVal) sliderVal.textContent = `${maxVal} (All Layers)`;
+    updateGpuPresetActive(99);
+  } else {
+    if (slider && sliderVal) {
+      sliderVal.textContent = slider.value;
+      updateGpuPresetActive(Number(slider.value));
+    }
+  }
+
+  if (markDirty) {
+    saveCurrentModelConfigDebounced();
+  }
+}
+
 function setupSliders() {
   const gpuSlider = $<HTMLInputElement>("#cfg-gpu-layers");
   const gpuVal = $("#cfg-gpu-layers-val");
-  gpuSlider.addEventListener("input", () => {
-    gpuVal.textContent = gpuSlider.value;
+
+  gpuSlider?.addEventListener("input", () => {
+    const val = Number(gpuSlider.value);
+    if (val === 0) {
+      setExecutionMode("cpu", true);
+    } else if (val >= 99 || (detectedBlockCount > 0 && val >= detectedBlockCount)) {
+      setExecutionMode("gpu", true);
+    } else {
+      activeExecutionMode = "custom";
+      document.querySelectorAll(".exec-mode-btn").forEach((btn) => {
+        btn.classList.toggle("active", btn.getAttribute("data-mode") === "custom");
+      });
+      $<HTMLButtonElement>("#btn-quick-mode-gpu")?.classList.remove("active");
+      $<HTMLButtonElement>("#btn-quick-mode-cpu")?.classList.remove("active");
+      $<HTMLButtonElement>("#btn-quick-mode-custom")?.classList.add("active");
+      const cfgBadge = $<HTMLElement>("#cfg-exec-mode-badge");
+      if (cfgBadge) cfgBadge.textContent = "Custom";
+      const dashBadge = $<HTMLElement>("#dash-exec-mode-badge");
+      if (dashBadge) dashBadge.textContent = "Custom";
+      if (gpuVal) gpuVal.textContent = String(val);
+      updateGpuPresetActive(val);
+      saveCurrentModelConfigDebounced();
+    }
+  });
+
+  // Segmented control buttons on Configuration tab
+  document.querySelectorAll<HTMLButtonElement>(".exec-mode-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const mode = (btn.getAttribute("data-mode") || "gpu") as "gpu" | "cpu" | "custom";
+      setExecutionMode(mode, true);
+    });
+  });
+
+  // 1-Click Quick Execution Mode buttons on Overview tab
+  $<HTMLButtonElement>("#btn-quick-mode-gpu")?.addEventListener("click", () => {
+    setExecutionMode("gpu", true);
+    showToast("Execution mode set to Only GPU (all layers offloaded).", "info", "GPU Mode Active");
+  });
+  $<HTMLButtonElement>("#btn-quick-mode-cpu")?.addEventListener("click", () => {
+    setExecutionMode("cpu", true);
+    showToast("Execution mode set to Only CPU (--device none, 0 VRAM used).", "info", "CPU Mode Active");
+  });
+  $<HTMLButtonElement>("#btn-quick-mode-custom")?.addEventListener("click", () => {
+    setExecutionMode("custom", true);
+    const navConfig = document.querySelector<HTMLElement>('[data-tab="config"]');
+    navConfig?.click();
+  });
+
+  // Layer presets
+  document.querySelectorAll<HTMLButtonElement>("#cfg-gpu-presets .preset-pill").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const layersAttr = btn.getAttribute("data-layers");
+      const pctAttr = btn.getAttribute("data-pct");
+      if (layersAttr !== null) {
+        const layers = Number(layersAttr);
+        if (layers === 0) {
+          setExecutionMode("cpu", true);
+        } else {
+          setExecutionMode("gpu", true);
+        }
+      } else if (pctAttr !== null) {
+        const pct = Number(pctAttr);
+        const total = detectedBlockCount > 0 ? detectedBlockCount : 99;
+        const target = Math.max(1, Math.round((total * pct) / 100));
+        activeExecutionMode = "custom";
+        if (gpuSlider) gpuSlider.value = String(target);
+        if (gpuVal) gpuVal.textContent = `${target} (${pct}%)`;
+        setExecutionMode("custom", false);
+        updateGpuPresetActive(target);
+        saveCurrentModelConfigDebounced();
+      }
+    });
   });
 
   const threadSlider = $<HTMLInputElement>("#cfg-threads");
   const threadVal = $("#cfg-threads-val");
-  threadSlider.addEventListener("input", () => {
-    threadVal.textContent = threadSlider.value;
+  threadSlider?.addEventListener("input", () => {
+    if (threadVal) threadVal.textContent = threadSlider.value;
   });
 }
 
@@ -747,8 +881,9 @@ function collectConfigFromUI(overrideModelPath?: string): ServerConfig {
   return {
     modelPath: overrideModelPath !== undefined ? overrideModelPath : (quickSelect.value || ""),
     host: $<HTMLInputElement>("#cfg-host").value || "127.0.0.1",
+    executionMode: activeExecutionMode,
     port: Number($<HTMLInputElement>("#quick-port").value || 8080),
-    gpuLayers: Number($<HTMLInputElement>("#cfg-gpu-layers").value || 99),
+    gpuLayers: activeExecutionMode === "cpu" ? 0 : Number($<HTMLInputElement>("#cfg-gpu-layers").value || 99),
     contextSize: Number($<HTMLInputElement>("#cfg-context")?.value || 4096),
     threads: Number($<HTMLInputElement>("#cfg-threads").value || 6),
     batchSize: Number($<HTMLInputElement>("#cfg-batch")?.value || 512),
@@ -1031,11 +1166,15 @@ function applyConfigToUI(cfg: ServerConfig) {
     if (qPort) qPort.value = String(cfg.port);
     currentServerPort = cfg.port;
   }
-  if (cfg.gpuLayers !== undefined) {
-    const gpuLayers = $<HTMLInputElement>("#cfg-gpu-layers");
-    if (gpuLayers) gpuLayers.value = String(cfg.gpuLayers);
-    const badge = $("#cfg-gpu-layers-val");
-    if (badge) badge.textContent = String(cfg.gpuLayers);
+  if (cfg.gpuLayers !== undefined || cfg.executionMode) {
+    const mode = (cfg.executionMode || (cfg.gpuLayers === 0 ? "cpu" : (cfg.gpuLayers !== undefined && cfg.gpuLayers < 99 && cfg.gpuLayers > 0 ? "custom" : "gpu"))) as "gpu" | "cpu" | "custom";
+    if (cfg.gpuLayers !== undefined) {
+      const gpuLayers = $<HTMLInputElement>("#cfg-gpu-layers");
+      if (gpuLayers) gpuLayers.value = String(cfg.gpuLayers);
+      const badge = $("#cfg-gpu-layers-val");
+      if (badge) badge.textContent = String(cfg.gpuLayers);
+    }
+    setExecutionMode(mode, false);
   }
   if (cfg.contextSize) {
     const ctx = $<HTMLInputElement>("#cfg-context");
@@ -1236,10 +1375,12 @@ async function handleAutoDetectConfig() {
 
     // Apply detected parameters to the UI controls
     if (params.blockCount > 0) {
+      detectedBlockCount = params.blockCount;
       const gpuInput = $<HTMLInputElement>("#cfg-gpu-layers");
       if (gpuInput) gpuInput.value = String(params.blockCount);
       const valBadge = $("#cfg-gpu-layers-val");
       if (valBadge) valBadge.textContent = String(params.blockCount);
+      setExecutionMode(activeExecutionMode, false);
     }
 
     if (params.recommendedContext > 0) {
@@ -1437,6 +1578,28 @@ function updateServerUI(st: ServerStatus) {
     dashUptime.textContent = `PID ${st.pid} · Uptime ${formatUptime(st.uptimeSeconds)}`;
     dashModel.textContent = st.activeModel || "Loaded";
     dashPort.textContent = `${st.host}:${st.port}`;
+
+    const dashLayers = $<HTMLElement>("#dash-gpu-layers");
+    if (dashLayers) {
+      if (st.executionMode === "cpu" || st.gpuLayers === 0) {
+        dashLayers.textContent = "CPU Only (0 Layers)";
+      } else if (st.executionMode === "gpu" || st.gpuLayers >= 99) {
+        dashLayers.textContent = "GPU Only (All Layers)";
+      } else {
+        dashLayers.textContent = `${st.gpuLayers} Layers (Hybrid)`;
+      }
+    }
+
+    const dashExecBadge = $<HTMLElement>("#dash-exec-mode-badge");
+    if (dashExecBadge) {
+      const m = st.executionMode || (st.gpuLayers === 0 ? "cpu" : "gpu");
+      dashExecBadge.textContent = m === "cpu" ? "CPU Only" : m === "gpu" ? "GPU Only" : "Custom";
+    }
+
+    const activeMode = st.executionMode || (st.gpuLayers === 0 ? "cpu" : "gpu");
+    $<HTMLButtonElement>("#btn-quick-mode-gpu")?.classList.toggle("active", activeMode === "gpu");
+    $<HTMLButtonElement>("#btn-quick-mode-cpu")?.classList.toggle("active", activeMode === "cpu");
+    $<HTMLButtonElement>("#btn-quick-mode-custom")?.classList.toggle("active", activeMode === "custom");
     const chatBadge = $("#chat-active-model-badge");
     if (chatBadge) {
       const modelName = st.activeModel ? st.activeModel.split("/").pop()!.split("\\").pop()! : "Active";
@@ -2981,7 +3144,7 @@ function setupChat() {
     const answer = content.replace(/<(think|thought)>[\s\S]*?(?:<\/\1>|$)/gi, "").trim();
 
     return {
-      reasoning: reasoning.length > 0 ? reasoning : undefined,
+      reasoning: reasoning.length > 0 ? reasoning : (content.includes("<think>") ? "Thinking..." : undefined),
       answer,
     };
   }

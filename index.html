@@ -130,12 +130,30 @@
               </div>
 
               <div class="metric-box">
-                <div class="metric-meta">GPU Acceleration</div>
-                <div class="metric-data" id="dash-gpu-layers">99 Layers</div>
+                <div class="metric-meta" style="display: flex; justify-content: space-between; align-items: center;">
+                  <span>Execution Mode</span>
+                  <span class="tag-badge accent" id="dash-exec-mode-badge" style="font-size: 10px; padding: 1px 6px;">GPU Only</span>
+                </div>
+                <div class="metric-data" id="dash-gpu-layers" style="font-size: 15px;">99 Layers</div>
                 <div class="metric-sub" id="dash-backend-val">CUDA (NVIDIA)</div>
+                <!-- 1-Click Quick Execution Mode Switcher -->
+                <div class="exec-quick-toggle-group" id="dash-exec-quick-group" style="display: flex; gap: 4px; margin-top: 8px;">
+                  <button type="button" class="btn btn-secondary btn-sm exec-mode-quick-btn active" id="btn-quick-mode-gpu" title="Run 100% on GPU (offload all layers)">
+                    <i data-lucide="zap"></i>
+                    <span>GPU Only</span>
+                  </button>
+                  <button type="button" class="btn btn-secondary btn-sm exec-mode-quick-btn" id="btn-quick-mode-cpu" title="Run 100% on CPU with 0 GPU VRAM allocation (--device none)">
+                    <i data-lucide="cpu"></i>
+                    <span>CPU Only</span>
+                  </button>
+                  <button type="button" class="btn btn-secondary btn-sm exec-mode-quick-btn" id="btn-quick-mode-custom" title="Custom / Hybrid layer offloading">
+                    <i data-lucide="sliders"></i>
+                    <span>Custom</span>
+                  </button>
+                </div>
                 <div style="display: flex; gap: 6px; margin-top: 6px;">
                   <button class="btn btn-secondary btn-sm" id="btn-dash-manage-backend" style="padding: 2px 8px; font-size: 11px;">
-                    <i data-lucide="cpu"></i>
+                    <i data-lucide="wrench"></i>
                     <span>Manage</span>
                   </button>
                   <button class="btn btn-danger btn-sm" id="btn-dash-uninstall-backend" style="padding: 2px 8px; font-size: 11px;" title="Uninstall active backend">
@@ -466,12 +484,52 @@
               </div>
 
               <div class="form-field">
-                <label class="form-label">GPU Offload Layers (-ngl)</label>
-                <div class="slider-group">
-                  <input type="range" id="cfg-gpu-layers" min="0" max="99" value="99" />
-                  <span class="slider-value" id="cfg-gpu-layers-val">99</span>
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                  <label class="form-label" style="margin-bottom: 0;">Execution Mode & Acceleration</label>
+                  <span class="tag-badge accent" id="cfg-exec-mode-badge">Only GPU</span>
                 </div>
-                <div class="surface-desc" style="margin-top: 4px;">Default is 99 (offloads all layers to NVIDIA RTX 3060).</div>
+                <div class="exec-mode-segmented-group" id="cfg-exec-mode-group">
+                  <button type="button" class="exec-mode-btn active" id="btn-mode-gpu" data-mode="gpu">
+                    <i data-lucide="zap"></i>
+                    <div class="exec-mode-btn-text">
+                      <span class="exec-mode-btn-title">Only GPU</span>
+                      <span class="exec-mode-btn-desc">Offload all layers to GPU VRAM for maximum speed</span>
+                    </div>
+                  </button>
+                  <button type="button" class="exec-mode-btn" id="btn-mode-cpu" data-mode="cpu">
+                    <i data-lucide="cpu"></i>
+                    <div class="exec-mode-btn-text">
+                      <span class="exec-mode-btn-title">Only CPU</span>
+                      <span class="exec-mode-btn-desc">100% host CPU threads, zero GPU VRAM allocation (--device none)</span>
+                    </div>
+                  </button>
+                  <button type="button" class="exec-mode-btn" id="btn-mode-custom" data-mode="custom">
+                    <i data-lucide="sliders"></i>
+                    <div class="exec-mode-btn-text">
+                      <span class="exec-mode-btn-title">Custom / Hybrid</span>
+                      <span class="exec-mode-btn-desc">Split layers between GPU VRAM and CPU RAM</span>
+                    </div>
+                  </button>
+                </div>
+                <div id="cfg-custom-layers-wrap" style="margin-top: 10px;">
+                  <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                    <span style="font-size: 11.5px; color: var(--text-medium); font-weight: 500;">GPU Offload Layers (-ngl)</span>
+                    <span class="slider-value" id="cfg-gpu-layers-val" style="font-size: 12px; font-weight: 600;">99</span>
+                  </div>
+                  <div class="slider-group">
+                    <input type="range" id="cfg-gpu-layers" min="0" max="99" value="99" />
+                  </div>
+                  <div class="preset-pill-group" id="cfg-gpu-presets" style="margin-top: 6px;">
+                    <button type="button" class="preset-pill" data-layers="0">CPU Only (0)</button>
+                    <button type="button" class="preset-pill" data-pct="25">25% Offload</button>
+                    <button type="button" class="preset-pill" data-pct="50">50% Offload</button>
+                    <button type="button" class="preset-pill" data-pct="75">75% Offload</button>
+                    <button type="button" class="preset-pill active" data-layers="99">GPU Only (Max)</button>
+                  </div>
+                  <div class="surface-desc" id="cfg-exec-mode-help" style="margin-top: 6px;">
+                    Pure CPU mode automatically passes <code>-ngl 0 --device none</code> (and <code>--spec-draft-ngl 0 --spec-draft-device none</code>, <code>--mmproj-device none</code>) to ensure 0 bytes of GPU VRAM are allocated.
+                  </div>
+                </div>
               </div>
 
               <div class="adv-grid" style="grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); margin-bottom: 16px;">

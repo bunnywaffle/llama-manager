@@ -2699,3 +2699,121 @@ table.data-table tr:hover td {
   color: #ef4444;
   background: rgba(239, 68, 68, 0.12);
 }
+
+
+/* Execution Mode Segmented Controls & Presets */
+.exec-mode-segmented-group {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin-top: 6px;
+}
+
+@media (max-width: 680px) {
+  .exec-mode-segmented-group {
+    grid-template-columns: 1fr;
+  }
+}
+
+.exec-mode-btn {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  background: var(--bg-surface, rgba(255, 255, 255, 0.03));
+  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
+  border-radius: var(--radius-sm, 8px);
+  color: var(--text-medium);
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.15s ease;
+  user-select: none;
+}
+
+.exec-mode-btn i {
+  width: 18px;
+  height: 18px;
+  margin-top: 2px;
+  flex-shrink: 0;
+  color: var(--text-low);
+  transition: color 0.15s ease;
+}
+
+.exec-mode-btn-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.exec-mode-btn-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-high);
+}
+
+.exec-mode-btn-desc {
+  font-size: 11px;
+  color: var(--text-low);
+  line-height: 1.3;
+}
+
+.exec-mode-btn:hover {
+  background: var(--bg-surface-hover, rgba(255, 255, 255, 0.06));
+  border-color: var(--border-hover, rgba(255, 255, 255, 0.18));
+}
+
+.exec-mode-btn.active {
+  background: rgba(56, 189, 248, 0.1);
+  border-color: var(--accent-primary, #38bdf8);
+  box-shadow: 0 0 0 1px var(--accent-primary, #38bdf8);
+}
+
+.exec-mode-btn.active i {
+  color: var(--accent-primary, #38bdf8);
+}
+
+.exec-mode-btn.active .exec-mode-btn-title {
+  color: var(--accent-primary, #38bdf8);
+}
+
+/* Overview 1-Click Quick Execution Mode Buttons */
+.exec-quick-toggle-group {
+  display: flex;
+  gap: 4px;
+}
+
+.exec-mode-quick-btn {
+  flex: 1;
+  padding: 4px 6px;
+  font-size: 11px;
+  font-weight: 500;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  border-radius: var(--radius-xs, 4px);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
+  color: var(--text-medium);
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+
+.exec-mode-quick-btn i {
+  width: 12px;
+  height: 12px;
+}
+
+.exec-mode-quick-btn:hover {
+  background: var(--bg-surface-hover);
+  color: var(--text-high);
+  border-color: var(--border-hover);
+}
+
+.exec-mode-quick-btn.active {
+  background: rgba(56, 189, 248, 0.15);
+  border-color: var(--accent-primary, #38bdf8);
+  color: var(--accent-primary, #38bdf8);
+  font-weight: 600;
+}

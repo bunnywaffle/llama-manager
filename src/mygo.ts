@@ -193,6 +193,8 @@ export interface RuntimeLoraInfo {
 /** ServerConfig holds the launch configuration parameters for llama-server. */
 export interface ServerConfig {
   modelPath: string;
+  /** "gpu", "cpu", "custom" */
+  executionMode?: string;
   host: string;
   port: number;
   gpuLayers: number;
@@ -265,6 +267,8 @@ export interface ServerStatus {
   hasVision: boolean;
   mmprojPath?: string;
   loraCount: number;
+  executionMode?: string;
+  gpuLayers: number;
 }
 
 export interface TroubleshootReport {

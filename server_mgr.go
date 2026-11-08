@@ -25,6 +25,7 @@ import (
 // ServerConfig holds the launch configuration parameters for llama-server.
 type ServerConfig struct {
 	ModelPath      string  `json:"modelPath"`
+	ExecutionMode  string  `json:"executionMode,omitempty"` // "gpu", "cpu", "custom"
 	Host           string  `json:"host"`
 	Port           int     `json:"port"`
 	GPULayers      int     `json:"gpuLayers"`
@@ -121,6 +122,8 @@ type ServerStatus struct {
 	HasVision     bool    `json:"hasVision"`
 	MMProjPath    string  `json:"mmprojPath,omitempty"`
 	LoraCount     int     `json:"loraCount"`
+	ExecutionMode string  `json:"executionMode,omitempty"`
+	GPULayers     int     `json:"gpuLayers"`
 }
 
 type ServerManager struct {
@@ -143,6 +146,7 @@ type ServerManager struct {
 
 func getDefaultServerConfig() ServerConfig {
 	return ServerConfig{
+		ExecutionMode:    "gpu",
 		Host:             "127.0.0.1",
 		Port:             8080,
 		GPULayers:        99,
@@ -166,7 +170,7 @@ func getDefaultServerConfig() ServerConfig {
 		ContBatching:     true,
 		RoPEScaling:      "none",
 		SplitMode:        "none",
-		ReasoningFormat:  "deepseek-legacy",
+		ReasoningFormat:  "none",
 		ReasoningEffort:  "default",
 		EnableJinja:      true,
 		LoraAdapters:     []LoraAdapterConfig{},
@@ -554,8 +558,25 @@ func (sm *ServerManager) startProcess(cfg ServerConfig) (chan error, string, err
 		"--host", cfg.Host,
 		"--port", strconv.Itoa(cfg.Port),
 		"-c", strconv.Itoa(cfg.ContextSize),
-		"-ngl", strconv.Itoa(cfg.GPULayers),
 		"-b", strconv.Itoa(cfg.BatchSize),
+	}
+
+	// Execution Mode: Pure CPU vs GPU Only vs Custom
+	isCPUOnly := cfg.ExecutionMode == "cpu" || (cfg.ExecutionMode != "gpu" && cfg.GPULayers == 0)
+	if isCPUOnly {
+		args = append(args, "-ngl", "0", "--device", "none")
+	} else if cfg.ExecutionMode == "gpu" {
+		gpuLayers := cfg.GPULayers
+		if gpuLayers <= 0 {
+			gpuLayers = 99
+		}
+		args = append(args, "-ngl", strconv.Itoa(gpuLayers))
+	} else {
+		gpuLayers := cfg.GPULayers
+		if gpuLayers < 0 {
+			gpuLayers = 0
+		}
+		args = append(args, "-ngl", strconv.Itoa(gpuLayers))
 	}
 
 	if cfg.RouterMode {
@@ -571,6 +592,9 @@ func (sm *ServerManager) startProcess(cfg ServerConfig) (chan error, string, err
 	if strings.TrimSpace(cfg.MMProjPath) != "" {
 		if _, err := os.Stat(cfg.MMProjPath); err == nil {
 			args = append(args, "--mmproj", cfg.MMProjPath)
+			if isCPUOnly {
+				args = append(args, "--mmproj-device", "none")
+			}
 		}
 	}
 
@@ -581,7 +605,9 @@ func (sm *ServerManager) startProcess(cfg ServerConfig) (chan error, string, err
 			if cfg.DraftMaxTokens > 0 {
 				args = append(args, "--spec-draft-n-max", strconv.Itoa(cfg.DraftMaxTokens))
 			}
-			if cfg.DraftGPULayers > 0 {
+			if isCPUOnly {
+				args = append(args, "--spec-draft-ngl", "0", "--spec-draft-device", "none")
+			} else if cfg.DraftGPULayers > 0 {
 				args = append(args, "--spec-draft-ngl", strconv.Itoa(cfg.DraftGPULayers))
 			}
 			if cfg.DraftSpecType != "" && cfg.DraftSpecType != "none" {
@@ -902,15 +928,26 @@ func (sm *ServerManager) getStatusLocked() ServerStatus {
 		}
 	}
 
+	execMode := sm.cfg.ExecutionMode
+	if execMode == "" {
+		if sm.cfg.GPULayers == 0 {
+			execMode = "cpu"
+		} else {
+			execMode = "gpu"
+		}
+	}
+
 	status := ServerStatus{
-		Running:     sm.running,
-		Host:        sm.cfg.Host,
-		Port:        sm.cfg.Port,
-		ActiveModel: filepath.Base(sm.cfg.ModelPath),
-		ErrorMsg:    sm.lastError,
-		HasVision:   hasVision,
-		MMProjPath:  sm.cfg.MMProjPath,
-		LoraCount:   activeLoraCount,
+		Running:       sm.running,
+		Host:          sm.cfg.Host,
+		Port:          sm.cfg.Port,
+		ActiveModel:   filepath.Base(sm.cfg.ModelPath),
+		ErrorMsg:      sm.lastError,
+		HasVision:     hasVision,
+		MMProjPath:    sm.cfg.MMProjPath,
+		LoraCount:     activeLoraCount,
+		ExecutionMode: execMode,
+		GPULayers:     sm.cfg.GPULayers,
 	}
 
 	if sm.running && sm.cmd != nil && sm.cmd.Process != nil {
@@ -1171,10 +1208,9 @@ func (sm *ServerManager) StopChatStream(sessionID string) error {
 // to completely bypass browser CORS and WebKitGTK mixed-content restrictions across Linux and macOS.
 func (sm *ServerManager) StreamChatMessage(win *mygo.Window, sessionID string, nodeID string, model string, messages []ChatMessage, temperature float64, reasoningEffort string) error {
 	emitChunk := func(c ChatStreamChunk) {
+		_ = ChatChunkEvent.Broadcast(c)
 		if win != nil {
 			_ = ChatChunkEvent.Emit(win, c)
-		} else {
-			_ = ChatChunkEvent.Broadcast(c)
 		}
 	}
 
