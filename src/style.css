@@ -1475,6 +1475,7 @@ table.data-table tr:hover td {
 }
 
 .btn-code-copy,
+.btn-code-wrap,
 .btn-code-save {
   display: inline-flex;
   align-items: center;
@@ -1491,10 +1492,17 @@ table.data-table tr:hover td {
 }
 
 .btn-code-copy:hover,
+.btn-code-wrap:hover,
 .btn-code-save:hover {
   background: rgba(255, 255, 255, 0.08);
   color: var(--text-high);
   border-color: rgba(255, 255, 255, 0.25);
+}
+
+.btn-code-wrap.active {
+  color: var(--accent-primary, #38bdf8);
+  border-color: rgba(56, 189, 248, 0.35);
+  background: rgba(56, 189, 248, 0.08);
 }
 
 .btn-code-copy.copied {
@@ -1503,6 +1511,7 @@ table.data-table tr:hover td {
 }
 
 .btn-code-copy svg,
+.btn-code-wrap svg,
 .btn-code-save svg {
   width: 12px;
   height: 12px;
@@ -1519,15 +1528,46 @@ table.data-table tr:hover td {
   font-family: var(--font-mono);
   font-size: 12.5px;
   line-height: 1.5;
+  white-space: pre-wrap !important;
+  word-break: break-word !important;
+  overflow-wrap: anywhere !important;
 }
 
-.code-block-container pre code.hljs {
+.code-block-container pre code.hljs,
+.code-block-container pre code {
   padding: 0 !important;
   margin: 0 !important;
   background: transparent !important;
   border: none !important;
   font-family: var(--font-mono);
   display: block;
+  white-space: pre-wrap !important;
+  word-break: break-word !important;
+  overflow-wrap: anywhere !important;
+}
+
+/* User toggled horizontal scroll (no line wrapping) */
+.code-block-container.code-nowrap pre,
+.code-block-container.code-nowrap pre code.hljs,
+.code-block-container.code-nowrap pre code {
+  white-space: pre !important;
+  word-break: normal !important;
+  overflow-wrap: normal !important;
+  overflow-x: auto !important;
+}
+
+/* Resilient wrapping for streaming or raw pre blocks inside chat bubbles */
+.chat-entry pre {
+  white-space: pre-wrap !important;
+  word-break: break-word !important;
+  overflow-wrap: anywhere !important;
+  max-width: 100%;
+}
+
+.chat-entry pre code {
+  white-space: pre-wrap !important;
+  word-break: break-word !important;
+  overflow-wrap: anywhere !important;
 }
 
 /* Branching Pagination & Actions Toolbar */

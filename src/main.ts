@@ -236,7 +236,7 @@ marked.use({
       const ext = getExtensionForLang(displayLang);
       const defaultFilename = `snippet.${ext}`;
 
-      return `<div class="code-block-container" data-lang="${displayLang}"><div class="code-block-header"><span class="code-block-lang">${displayLang}</span><div class="code-block-actions"><button type="button" class="btn-code-copy" title="Copy code snippet"><i data-lucide="copy"></i><span>Copy</span></button><button type="button" class="btn-code-save" data-filename="${defaultFilename}" title="Save code to file"><i data-lucide="download"></i><span>Save</span></button></div></div><pre><code class="hljs ${language ? `language-${language}` : ""}">${highlighted}</code></pre></div>`;
+      return `<div class="code-block-container" data-lang="${displayLang}"><div class="code-block-header"><span class="code-block-lang">${displayLang}</span><div class="code-block-actions"><button type="button" class="btn-code-copy" title="Copy code snippet"><i data-lucide="copy"></i><span>Copy</span></button><button type="button" class="btn-code-wrap active" title="Toggle line wrapping"><i data-lucide="text-wrap"></i><span>Wrap</span></button><button type="button" class="btn-code-save" data-filename="${defaultFilename}" title="Save code to file"><i data-lucide="download"></i><span>Save</span></button></div></div><pre><code class="hljs ${language ? `language-${language}` : ""}">${highlighted}</code></pre></div>`;
     },
   },
 });
@@ -939,7 +939,7 @@ function collectConfigFromUI(overrideModelPath?: string): ServerConfig {
     draftSpecType: $<HTMLSelectElement>("#cfg-draft-type")?.value || "none",
 
     // Reasoning & Thinking Settings
-    reasoningFormat: $<HTMLSelectElement>("#cfg-reasoning-format")?.value || "deepseek-legacy",
+    reasoningFormat: $<HTMLSelectElement>("#cfg-reasoning-format")?.value || "none",
     reasoningEffort: $<HTMLSelectElement>("#cfg-reasoning-effort")?.value || "default",
     enableJinja: $<HTMLInputElement>("#cfg-enable-jinja")?.checked ?? true,
 
@@ -2876,6 +2876,21 @@ function setupChat() {
           downloadSnippet(defaultFilename, codeText);
           showToast(`Downloaded ${defaultFilename}`, "success", "Code Saved");
         }
+      }
+      return;
+    }
+
+    // 3. Toggle line wrapping
+    const wrapBtn = target.closest<HTMLButtonElement>('.btn-code-wrap');
+    if (wrapBtn) {
+      const codeContainer = wrapBtn.closest<HTMLElement>('.code-block-container');
+      if (codeContainer) {
+        codeContainer.classList.toggle('code-nowrap');
+        const isNowrap = codeContainer.classList.contains('code-nowrap');
+        wrapBtn.classList.toggle('active', !isNowrap);
+        const span = wrapBtn.querySelector('span');
+        if (span) span.textContent = isNowrap ? 'Scroll' : 'Wrap';
+        wrapBtn.title = isNowrap ? 'Enable line wrapping' : 'Disable line wrapping (scroll)';
       }
       return;
     }

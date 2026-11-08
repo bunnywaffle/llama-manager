@@ -1211,9 +1211,10 @@ func (sm *ServerManager) StopChatStream(sessionID string) error {
 // to completely bypass browser CORS and WebKitGTK mixed-content restrictions across Linux and macOS.
 func (sm *ServerManager) StreamChatMessage(win *mygo.Window, sessionID string, nodeID string, model string, messages []ChatMessage, temperature float64, reasoningEffort string) error {
 	emitChunk := func(c ChatStreamChunk) {
-		_ = ChatChunkEvent.Broadcast(c)
 		if win != nil {
 			_ = ChatChunkEvent.Emit(win, c)
+		} else {
+			_ = ChatChunkEvent.Broadcast(c)
 		}
 	}
 
