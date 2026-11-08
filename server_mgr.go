@@ -466,6 +466,13 @@ func (sm *ServerManager) Start(cfg ServerConfig) error {
 		}
 	}
 
+	if startedSuccessfully {
+		go func() {
+			time.Sleep(300 * time.Millisecond)
+			sm.syncStartupLoraScales(cfg)
+		}()
+	}
+
 	return nil
 }
 
@@ -720,22 +727,18 @@ func (sm *ServerManager) startProcess(cfg ServerConfig) (chan error, string, err
 	}
 
 	// Reasoning & Thinking model arguments (DeepSeek-R1, QwQ, etc.)
-	// LoRA Adapters
+	// LoRA Adapters: Use --lora to avoid Windows drive-letter colon parsing bugs with --lora-scaled (FNAME:SCALE)
 	if len(cfg.LoraAdapters) > 0 {
-		var loraParts []string
+		var loraPaths []string
 		for _, la := range cfg.LoraAdapters {
 			if la.Enabled && strings.TrimSpace(la.Path) != "" {
 				if _, err := os.Stat(la.Path); err == nil {
-					scale := la.Scale
-					if scale <= 0 {
-						scale = 1.0
-					}
-					loraParts = append(loraParts, fmt.Sprintf("%s:%.2f", la.Path, scale))
+					loraPaths = append(loraPaths, la.Path)
 				}
 			}
 		}
-		if len(loraParts) > 0 {
-			args = append(args, "--lora-scaled", strings.Join(loraParts, ","))
+		if len(loraPaths) > 0 {
+			args = append(args, "--lora", strings.Join(loraPaths, ","))
 		}
 	}
 
@@ -1533,4 +1536,36 @@ func (sm *ServerManager) SetRuntimeLoraAdapters(adapters []RuntimeLoraInfo) erro
 	}
 
 	return nil
+}
+
+func (sm *ServerManager) syncStartupLoraScales(cfg ServerConfig) {
+	if len(cfg.LoraAdapters) == 0 {
+		return
+	}
+	runtimeAdapters, err := sm.GetRuntimeLoraAdapters()
+	if err != nil || len(runtimeAdapters) == 0 {
+		return
+	}
+
+	var updates []RuntimeLoraInfo
+	idx := 0
+	for _, la := range cfg.LoraAdapters {
+		if !la.Enabled || strings.TrimSpace(la.Path) == "" {
+			continue
+		}
+		if idx < len(runtimeAdapters) {
+			scale := la.Scale
+			if scale <= 0 {
+				scale = 1.0
+			}
+			updates = append(updates, RuntimeLoraInfo{
+				ID:    runtimeAdapters[idx].ID,
+				Scale: scale,
+			})
+			idx++
+		}
+	}
+	if len(updates) > 0 {
+		_ = sm.SetRuntimeLoraAdapters(updates)
+	}
 }
