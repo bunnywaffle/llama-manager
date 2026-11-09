@@ -3431,8 +3431,17 @@ function setupChat() {
         actionsDiv.appendChild(editBtn);
       }
 
-      // Assistant node: Regenerate button
+      // Assistant node: Continue & Regenerate buttons
       if (node.role === "assistant") {
+        const continueBtn = document.createElement("button");
+        continueBtn.className = "entry-action-btn";
+        continueBtn.title = "Continue generation from this response";
+        continueBtn.innerHTML = `<i data-lucide="play"></i><span>Continue</span>`;
+        continueBtn.addEventListener("click", () => {
+          executeContinue(node);
+        });
+        actionsDiv.appendChild(continueBtn);
+
         const regenBtn = document.createElement("button");
         regenBtn.className = "entry-action-btn";
         regenBtn.title = "Regenerate alternative response";
@@ -3447,6 +3456,12 @@ function setupChat() {
       wrapper.appendChild(metaBar);
       container.appendChild(wrapper);
     });
+
+    const continueWrap = document.querySelector<HTMLElement>("#chat-continue-wrap");
+    if (continueWrap) {
+      const last = path.length > 0 ? path[path.length - 1] : undefined;
+      continueWrap.style.display = (last && last.role === "assistant" && !activeStreamingSessionId) ? "flex" : "none";
+    }
 
     container.scrollTop = container.scrollHeight;
     renderIcons();
@@ -3533,6 +3548,39 @@ function setupChat() {
     await triggerAssistantGeneration();
   }
 
+  // Continue assistant generation
+  async function executeContinue(fromNode?: ChatNode) {
+    if (!isServerRunning) {
+      showToast("Start the server on the Overview tab before testing in the playground.", "warning", "Server Stopped");
+      return;
+    }
+    if (activeStreamingSessionId) {
+      showToast("Generation is already in progress. Stop or wait for it to finish.", "warning");
+      return;
+    }
+
+    if (fromNode) {
+      currentSession.activeNodeId = fromNode.id;
+    }
+
+    const path = getActiveConversationPath(currentSession);
+    const lastNode = path.length > 0 ? path[path.length - 1] : undefined;
+
+    if (!lastNode) {
+      showToast("No messages to continue from.", "info");
+      return;
+    }
+
+    if (lastNode.role === "assistant") {
+      addMessageToSession(currentSession, "user", "Continue");
+      saveSession(currentSession);
+      renderSessions();
+      renderStage();
+    }
+
+    await triggerAssistantGeneration();
+  }
+
   // Active streaming state tracking
   let activeStreamingSessionId = "";
   let activeStreamingNodeId = "";
@@ -3553,6 +3601,16 @@ function setupChat() {
       sendBtn.title = "Send message";
       sendBtn.classList.remove("chat-stop-btn");
       sendBtn.disabled = false;
+    }
+    const continueWrap = document.querySelector<HTMLElement>("#chat-continue-wrap");
+    if (continueWrap) {
+      if (generating) {
+        continueWrap.style.display = "none";
+      } else {
+        const path = getActiveConversationPath(currentSession);
+        const lastNode = path.length > 0 ? path[path.length - 1] : undefined;
+        continueWrap.style.display = (lastNode && lastNode.role === "assistant") ? "flex" : "none";
+      }
     }
     renderIcons();
   }
@@ -3645,6 +3703,12 @@ function setupChat() {
         setGeneratingState(false);
       }
     }
+  });
+
+  // Continue pill button click handler
+  const continueBarBtn = document.querySelector<HTMLButtonElement>("#btn-chat-continue");
+  continueBarBtn?.addEventListener("click", async () => {
+    await executeContinue();
   });
 
   // Stop button handler if clicked while streaming

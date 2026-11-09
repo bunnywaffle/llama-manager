@@ -1706,6 +1706,49 @@ table.data-table tr:hover td {
   flex-direction: column;
   gap: 6px;
 }
+/* Continue Generating Quick Action Bar */
+.chat-continue-wrap {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding-bottom: 2px;
+  animation: fadeIn 0.18s ease-out;
+}
+
+.btn-chat-continue {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 14px;
+  background: var(--bg-elevated, #1c2128);
+  border: 1px solid var(--border-default, rgba(255, 255, 255, 0.15));
+  border-radius: 9999px;
+  color: var(--text-high, #e6edf3);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+  transition: all 0.15s ease;
+  user-select: none;
+}
+
+.btn-chat-continue:hover {
+  background: var(--accent-primary, #38bdf8);
+  border-color: var(--accent-primary, #38bdf8);
+  color: #0b0f19;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(56, 189, 248, 0.35);
+}
+
+.btn-chat-continue:active {
+  transform: translateY(0);
+}
+
+.btn-chat-continue svg {
+  width: 13px;
+  height: 13px;
+  stroke-width: 2;
+}
 
 .chat-input-wrapper {
   display: flex;
