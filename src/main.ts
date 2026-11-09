@@ -3548,7 +3548,7 @@ function setupChat() {
     await triggerAssistantGeneration();
   }
 
-  // Continue assistant generation
+  // Continue assistant generation from where it left off (seamlessly in the same turn)
   async function executeContinue(fromNode?: ChatNode) {
     if (!isServerRunning) {
       showToast("Start the server on the Overview tab before testing in the playground.", "warning", "Server Stopped");
@@ -3571,14 +3571,14 @@ function setupChat() {
       return;
     }
 
-    if (lastNode.role === "assistant") {
-      addMessageToSession(currentSession, "user", "Continue");
-      saveSession(currentSession);
-      renderSessions();
-      renderStage();
+    if (lastNode.role !== "assistant") {
+      // If the last node was a user message, just trigger normal assistant generation
+      await triggerAssistantGeneration(false);
+      return;
     }
 
-    await triggerAssistantGeneration();
+    // Continue the assistant message directly in the same turn without creating extra chat bubbles
+    await triggerAssistantGeneration(true);
   }
 
   // Active streaming state tracking
@@ -3729,7 +3729,7 @@ function setupChat() {
   });
 
   // Trigger inference generation for the current active branch with live streaming
-  async function triggerAssistantGeneration() {
+  async function triggerAssistantGeneration(isContinuation = false) {
     if (!isServerRunning) {
       showToast("Start the server on the Overview tab before testing in the playground.", "warning", "Server Stopped");
       return;
@@ -3739,33 +3739,44 @@ function setupChat() {
     let activeNode = path.length > 0 ? path[path.length - 1] : undefined;
 
     let targetNode: ChatNode;
-    if (!activeNode || activeNode.role === "user") {
+    let prefillContent = "";
+
+    if (isContinuation && activeNode && activeNode.role === "assistant") {
+      targetNode = activeNode;
+      prefillContent = targetNode.content || "";
+      const parsed = parseReasoning(prefillContent);
+      activeReasoningText = (parsed.reasoning && parsed.reasoning !== "Thinking...") ? parsed.reasoning : "";
+      activeContentText = parsed.answer || (parsed.reasoning ? "" : prefillContent);
+    } else if (!activeNode || activeNode.role === "user") {
       targetNode = addMessageToSession(currentSession, "assistant", "");
       saveSession(currentSession);
       renderSessions();
       renderStage();
+      activeReasoningText = "";
+      activeContentText = "";
     } else {
       targetNode = activeNode;
       targetNode.content = "";
       saveSession(currentSession);
       renderSessions();
       renderStage();
+      activeReasoningText = "";
+      activeContentText = "";
     }
 
     activeStreamingSessionId = currentSession.id;
     activeStreamingNodeId = targetNode.id;
-    activeReasoningText = "";
-    activeContentText = "";
     setGeneratingState(true);
 
     const bubbleEl = document.querySelector<HTMLElement>(`#chat-node-${targetNode.id} .chat-entry`);
     if (bubbleEl) {
-      renderBubbleContent(bubbleEl, "", true);
+      renderBubbleContent(bubbleEl, isContinuation ? targetNode.content : "", true);
     }
 
-    const messagesToSend = getActiveConversationPath(currentSession)
+    const messagesToSend: any[] = [];
+    getActiveConversationPath(currentSession)
       .filter((n) => n.id !== targetNode.id)
-      .map((n) => {
+      .forEach((n) => {
         if (n.role === "user" && n.images && n.images.length > 0) {
           const parts: any[] = [];
           if (n.content && n.content.trim()) {
@@ -3779,10 +3790,16 @@ function setupChat() {
               image_url: { url: img },
             });
           });
-          return { role: n.role, content: parts };
+          messagesToSend.push({ role: n.role, content: parts });
+        } else {
+          messagesToSend.push({ role: n.role, content: n.content });
         }
-        return { role: n.role, content: n.content };
       });
+
+    // If continuing from where it left off, append targetNode as the assistant prefill
+    if (isContinuation && prefillContent) {
+      messagesToSend.push({ role: "assistant", content: prefillContent });
+    }
 
     // Inject persona system prompt
     const persona = getPersonaById(currentSession.personaId);
@@ -3796,16 +3813,18 @@ function setupChat() {
     const modelArg = routerCheck && routerCheck.checked && routerSelect && routerSelect.value ? routerSelect.value : "";
     const reasoningEffort = reasoningSelect ? reasoningSelect.value : (currentSession.reasoningEffort || "default");
 
+    const initialLen = isContinuation ? activeContentText.length : 0;
+
     // Fallback safety timeout: if no stream tokens are delivered within 35 seconds, fallback automatically to non-streaming RPC
     if (activeStreamingTimeout) clearTimeout(activeStreamingTimeout);
     activeStreamingTimeout = setTimeout(async () => {
-      if (activeStreamingSessionId === currentSession.id && (!activeContentText && !activeReasoningText)) {
+      if (activeStreamingSessionId === currentSession.id && (activeContentText.length === initialLen && !activeReasoningText)) {
         console.warn("No stream chunks received within 35s, initiating non-streaming fallback...");
         try {
           const reply = modelArg
             ? await LlamaService.sendChatWithModel(modelArg, messagesToSend, tempVal, reasoningEffort)
             : await LlamaService.sendChat(messagesToSend, tempVal, reasoningEffort);
-          targetNode.content = reply;
+          targetNode.content = isContinuation ? (prefillContent + reply) : reply;
           saveSession(currentSession);
           renderSessions();
           renderStage();

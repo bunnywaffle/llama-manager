@@ -1152,6 +1152,24 @@ func (sm *ServerManager) SendChatMessageWithModel(model string, messages []ChatM
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
+		if len(messages) > 0 && messages[len(messages)-1].Role == "assistant" {
+			_ = resp.Body.Close()
+			lastAssist := messages[len(messages)-1]
+			fallbackMessages := append([]ChatMessage(nil), messages[:len(messages)-1]...)
+			fallbackMessages = append(fallbackMessages, ChatMessage{
+				Role:    "user",
+				Content: fmt.Sprintf("Continue from where you left off without repeating:\n\n%v", lastAssist.Content),
+			})
+			reqBody["messages"] = fallbackMessages
+			if fbJSON, fbErr := json.Marshal(reqBody); fbErr == nil {
+				if fbResp, fbDoErr := client.Post(url, "application/json", strings.NewReader(string(fbJSON))); fbDoErr == nil && fbResp.StatusCode == http.StatusOK {
+					resp = fbResp
+				}
+			}
+		}
+	}
+
+	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(resp.Body)
 		if resp.StatusCode == http.StatusServiceUnavailable {
 			return "", fmt.Errorf("model is still loading (HTTP 503). Please wait a few seconds and try again")
@@ -1325,6 +1343,29 @@ func (sm *ServerManager) StreamChatMessage(win *mygo.Window, sessionID string, n
 		return fmt.Errorf("failed to call llama-server: %w", err)
 	}
 	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		// If the server rejected trailing assistant prefill (e.g. strict template or bad request),
+		// gracefully fall back to requesting continuation as a user message.
+		if len(messages) > 0 && messages[len(messages)-1].Role == "assistant" {
+			_ = resp.Body.Close()
+			lastAssist := messages[len(messages)-1]
+			fallbackMessages := append([]ChatMessage(nil), messages[:len(messages)-1]...)
+			fallbackMessages = append(fallbackMessages, ChatMessage{
+				Role:    "user",
+				Content: fmt.Sprintf("Continue from where you left off without repeating:\n\n%v", lastAssist.Content),
+			})
+			reqBody["messages"] = fallbackMessages
+			if fbJSON, fbErr := json.Marshal(reqBody); fbErr == nil {
+				if fbReq, fbReqErr := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(fbJSON)); fbReqErr == nil {
+					fbReq.Header.Set("Content-Type", "application/json")
+					if fbResp, fbDoErr := client.Do(fbReq); fbDoErr == nil && fbResp.StatusCode == http.StatusOK {
+						resp = fbResp
+					}
+				}
+			}
+		}
+	}
 
 	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(resp.Body)
