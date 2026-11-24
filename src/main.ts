@@ -45,7 +45,7 @@ import {
   FileJson,
 } from "lucide";
 import { marked } from "marked";
-import hljs from "highlight.js";
+import hljs from "highlight.js/lib/common";
 import "highlight.js/styles/github-dark.css";
 import {
   LlamaService,
@@ -82,7 +82,10 @@ import {
   getSiblingInfo,
 } from "./chat_tree";
 
-function renderIcons() {
+function renderIcons(root?: ParentNode) {
+  if (root && !root.querySelector("[data-lucide]")) {
+    return;
+  }
   createIcons({
     icons: {
       Cpu,
@@ -224,12 +227,14 @@ marked.use({
         } catch {
           highlighted = escapeHtml(cleanText);
         }
-      } else {
+      } else if (!isStreamingMarkdownRender) {
         try {
           highlighted = hljs.highlightAuto(cleanText).value;
         } catch {
           highlighted = escapeHtml(cleanText);
         }
+      } else {
+        highlighted = escapeHtml(cleanText);
       }
 
       const displayLang = language || "code";
@@ -250,6 +255,7 @@ function renderMarkdown(raw: string): string {
   }
 }
 
+let isStreamingMarkdownRender = false;
 let isServerRunning = false;
 let currentServerHost = "127.0.0.1";
 let currentServerPort = 8080;
@@ -1640,12 +1646,32 @@ function formatUptime(sec: number) {
   return `${h}h ${m % 60}m`;
 }
 
+const MAX_UI_LOG_LINES = 500;
+let uiLogLines: string[] = [];
+let logFlushScheduled = false;
+
+function scheduleLogFlush() {
+  if (logFlushScheduled) return;
+  logFlushScheduled = true;
+  requestAnimationFrame(() => {
+    logFlushScheduled = false;
+    const term = document.querySelector<HTMLElement>("#terminal-logs");
+    if (!term) return;
+    const wasNearBottom = (term.scrollHeight - term.scrollTop - term.clientHeight) < 80;
+    term.textContent = uiLogLines.join("\n");
+    if (wasNearBottom) {
+      term.scrollTop = term.scrollHeight;
+    }
+  });
+}
+
 async function loadLogs() {
   try {
     const logs = await LlamaService.getRecentLogs();
-    const term = $("#terminal-logs");
     if (logs && logs.length > 0) {
-      term.textContent = logs.join("\n");
+      uiLogLines = logs.slice(-MAX_UI_LOG_LINES);
+      const term = $("#terminal-logs");
+      term.textContent = uiLogLines.join("\n");
       term.scrollTop = term.scrollHeight;
     }
   } catch (err) {
@@ -1655,9 +1681,11 @@ async function loadLogs() {
 
 function setupEvents() {
   events.serverLog.on((line) => {
-    const term = $("#terminal-logs");
-    term.textContent += (term.textContent ? "\n" : "") + line;
-    term.scrollTop = term.scrollHeight;
+    uiLogLines.push(line);
+    if (uiLogLines.length > MAX_UI_LOG_LINES) {
+      uiLogLines.splice(0, uiLogLines.length - MAX_UI_LOG_LINES);
+    }
+    scheduleLogFlush();
   });
 
   events.serverStatus.on((st) => {
@@ -1906,6 +1934,7 @@ function setupActions() {
   });
 
   $("#btn-clear-logs").addEventListener("click", () => {
+    uiLogLines = [];
     $("#terminal-logs").textContent = "";
   });
   $("#btn-copy-logs").addEventListener("click", () => {
@@ -3247,7 +3276,7 @@ function setupChat() {
         answerDiv.style.display = "";
         answerDiv.className = "chat-answer-body";
         answerDiv.innerHTML = renderMarkdown(parsed.answer);
-        renderIcons();
+        renderIcons(answerDiv);
       } else {
         if (isStreaming) {
           // While thoughts are actively streaming, don't show a redundant/confusing "Thinking..." underneath the open thoughts!
@@ -3266,7 +3295,7 @@ function setupChat() {
       }
       if (content) {
         bubbleEl.innerHTML = renderMarkdown(content);
-        renderIcons();
+        renderIcons(bubbleEl);
       } else if (isStreaming) {
         bubbleEl.innerHTML = `
           <div class="chat-thinking-indicator">
@@ -3586,7 +3615,47 @@ function setupChat() {
   let activeStreamingNodeId = "";
   let activeReasoningText = "";
   let activeContentText = "";
+  let activeContinueRawMode = false;
   let activeStreamingTimeout: any = null;
+  let pendingStreamRenderTimer: number | null = null;
+  let pendingStreamSession: ChatSession | null = null;
+  let pendingStreamNode: ChatNode | undefined = undefined;
+  let pendingStreamText = "";
+
+  function cancelPendingStreamRender() {
+    if (pendingStreamRenderTimer !== null) {
+      clearTimeout(pendingStreamRenderTimer);
+      pendingStreamRenderTimer = null;
+    }
+    pendingStreamSession = null;
+    pendingStreamNode = undefined;
+    pendingStreamText = "";
+  }
+
+  function flushStreamRender() {
+    pendingStreamRenderTimer = null;
+    const sess = pendingStreamSession;
+    const node = pendingStreamNode;
+    const text = pendingStreamText;
+    if (!sess || sess.id !== currentSession.id || !activeStreamingSessionId) return;
+
+    const wasNearBottom = (container.scrollHeight - container.scrollTop - container.clientHeight) < 120;
+    const bubbleEl = (node ? document.querySelector<HTMLElement>(`#chat-node-${node.id} .chat-entry`) : null)
+      || (activeStreamingNodeId ? document.querySelector<HTMLElement>(`#chat-node-${activeStreamingNodeId} .chat-entry`) : null)
+      || document.querySelector<HTMLElement>(`.chat-entry-wrapper.assistant:last-child .chat-entry`);
+
+    if (bubbleEl) {
+      isStreamingMarkdownRender = true;
+      try {
+        renderBubbleContent(bubbleEl, text, true);
+      } finally {
+        isStreamingMarkdownRender = false;
+      }
+    }
+    if (wasNearBottom) {
+      container.scrollTop = container.scrollHeight;
+    }
+  }
 
   function setGeneratingState(generating: boolean) {
     const sendBtn = document.querySelector<HTMLButtonElement>("#btn-chat-send");
@@ -3634,6 +3703,7 @@ function setupChat() {
     }
 
     if (chunk.error) {
+      cancelPendingStreamRender();
       if (activeStreamingTimeout) {
         clearTimeout(activeStreamingTimeout);
         activeStreamingTimeout = null;
@@ -3646,6 +3716,7 @@ function setupChat() {
       if (isCurrent) setGeneratingState(false);
       activeStreamingSessionId = "";
       activeStreamingNodeId = "";
+      activeContinueRawMode = false;
       showToast(chunk.error, "error", "Generation Failed");
       return;
     }
@@ -3657,7 +3728,7 @@ function setupChat() {
       }
     }
 
-    if (chunk.reasoning) {
+    if (chunk.reasoning && !activeContinueRawMode) {
       activeReasoningText += chunk.reasoning;
     }
     if (chunk.content) {
@@ -3665,7 +3736,7 @@ function setupChat() {
     }
 
     let fullText = activeContentText;
-    if (activeReasoningText && !activeContentText.includes("<think>")) {
+    if (!activeContinueRawMode && activeReasoningText && !activeContentText.includes("<think>")) {
       fullText = `<think>\n${activeReasoningText}\n</think>\n${activeContentText}`;
     }
 
@@ -3673,24 +3744,15 @@ function setupChat() {
       targetNode.content = fullText;
     }
 
-    if (isCurrent) {
-      // Find bubble by targetNode id, activeStreamingNodeId, or fallback to the latest assistant bubble in DOM
-      const bubbleEl = (targetNode ? document.querySelector<HTMLElement>(`#chat-node-${targetNode.id} .chat-entry`) : null)
-        || (activeStreamingNodeId ? document.querySelector<HTMLElement>(`#chat-node-${activeStreamingNodeId} .chat-entry`) : null)
-        || document.querySelector<HTMLElement>(`.chat-entry-wrapper.assistant:last-child .chat-entry`);
-      if (bubbleEl) {
-        renderBubbleContent(bubbleEl, fullText, true);
-      }
-      container.scrollTop = container.scrollHeight;
-    }
-
     if (chunk.done) {
+      cancelPendingStreamRender();
       if (activeStreamingTimeout) {
         clearTimeout(activeStreamingTimeout);
         activeStreamingTimeout = null;
       }
       activeStreamingSessionId = "";
       activeStreamingNodeId = "";
+      activeContinueRawMode = false;
       if (targetNode) {
         targetNode.content = fullText;
       }
@@ -3701,6 +3763,18 @@ function setupChat() {
         setGeneratingState(false);
       } else {
         setGeneratingState(false);
+      }
+      return;
+    }
+
+    if (isCurrent) {
+      pendingStreamSession = session;
+      pendingStreamNode = targetNode;
+      pendingStreamText = fullText;
+      if (pendingStreamRenderTimer === null) {
+        pendingStreamRenderTimer = window.setTimeout(() => {
+          requestAnimationFrame(flushStreamRender);
+        }, 45);
       }
     }
   });
@@ -3744,14 +3818,21 @@ function setupChat() {
     if (isContinuation && activeNode && activeNode.role === "assistant") {
       targetNode = activeNode;
       prefillContent = targetNode.content || "";
-      const parsed = parseReasoning(prefillContent);
-      activeReasoningText = (parsed.reasoning && parsed.reasoning !== "Thinking...") ? parsed.reasoning : "";
-      activeContentText = parsed.answer || (parsed.reasoning ? "" : prefillContent);
+      if (prefillContent.includes("<think>") || prefillContent.includes("<thought>")) {
+        activeContinueRawMode = true;
+        activeReasoningText = "";
+        activeContentText = prefillContent;
+      } else {
+        activeContinueRawMode = false;
+        activeReasoningText = "";
+        activeContentText = prefillContent;
+      }
     } else if (!activeNode || activeNode.role === "user") {
       targetNode = addMessageToSession(currentSession, "assistant", "");
       saveSession(currentSession);
       renderSessions();
       renderStage();
+      activeContinueRawMode = false;
       activeReasoningText = "";
       activeContentText = "";
     } else {
@@ -3760,6 +3841,7 @@ function setupChat() {
       saveSession(currentSession);
       renderSessions();
       renderStage();
+      activeContinueRawMode = false;
       activeReasoningText = "";
       activeContentText = "";
     }

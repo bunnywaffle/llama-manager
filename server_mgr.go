@@ -662,6 +662,8 @@ func (sm *ServerManager) startProcess(cfg ServerConfig) (chan error, string, err
 	}
 	if cfg.MaxPredict > 0 {
 		args = append(args, "-n", strconv.Itoa(cfg.MaxPredict))
+	} else {
+		args = append(args, "-n", "-1")
 	}
 	if cfg.Seed >= 0 {
 		args = append(args, "--seed", strconv.Itoa(cfg.Seed))
@@ -1315,6 +1317,21 @@ func (sm *ServerManager) StreamChatMessage(win *mygo.Window, sessionID string, n
 		cancel()
 	}()
 
+	// Streaming client without total body timeout so unlimited/long generations never abort mid-stream
+	client := http.Client{
+		Transport: &http.Transport{
+			ResponseHeaderTimeout: 120 * time.Second,
+		},
+	}
+
+	// True continuation via /apply-template + /completion when trailing message is assistant prefill
+	if len(messages) > 0 && messages[len(messages)-1].Role == "assistant" {
+		handled, contErr := sm.tryStreamContinuation(ctx, &client, targetHost, port, sessionID, nodeID, messages, temperature, maxPredict, emitChunk)
+		if handled {
+			return contErr
+		}
+	}
+
 	url := fmt.Sprintf("http://%s:%d/v1/chat/completions", targetHost, port)
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(jsonData))
 	if err != nil {
@@ -1328,7 +1345,6 @@ func (sm *ServerManager) StreamChatMessage(win *mygo.Window, sessionID string, n
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	client := http.Client{Timeout: 300 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		if errors.Is(ctx.Err(), context.Canceled) {
@@ -1389,8 +1405,18 @@ func (sm *ServerManager) StreamChatMessage(win *mygo.Window, sessionID string, n
 	for {
 		line, err := reader.ReadString('\n')
 		if err != nil {
-			if errors.Is(ctx.Err(), context.Canceled) {
+			if errors.Is(ctx.Err(), context.Canceled) || errors.Is(err, io.EOF) {
 				break
+			}
+			sm.mu.Lock(); sm.addLogLocked(fmt.Sprintf("[StreamChat] Stream read interrupted after %d tokens: %v", totalTokens, err)); sm.mu.Unlock()
+			if totalTokens == 0 {
+				emitChunk(ChatStreamChunk{
+					SessionID: sessionID,
+					NodeID:    nodeID,
+					Error:     fmt.Sprintf("Stream interrupted: %v", err),
+					Done:      true,
+				})
+				return err
 			}
 			break
 		}
@@ -1504,6 +1530,141 @@ func (sm *ServerManager) StreamChatMessage(win *mygo.Window, sessionID string, n
 	})
 
 	return nil
+}
+
+// tryStreamContinuation uses llama-server /apply-template + /completion to continue
+// an assistant response from the exact last character without adding closing turn tokens.
+func (sm *ServerManager) tryStreamContinuation(
+	ctx context.Context,
+	client *http.Client,
+	host string,
+	port int,
+	sessionID string,
+	nodeID string,
+	messages []ChatMessage,
+	temperature float64,
+	maxPredict int,
+	emitChunk func(ChatStreamChunk),
+) (bool, error) {
+	if len(messages) == 0 {
+		return false, nil
+	}
+	priorMessages := messages[:len(messages)-1]
+	prefillText := fmt.Sprintf("%v", messages[len(messages)-1].Content)
+
+	tmplReqBody := map[string]interface{}{
+		"messages": priorMessages,
+	}
+	tmplJSON, err := json.Marshal(tmplReqBody)
+	if err != nil {
+		return false, nil
+	}
+
+	tmplURL := fmt.Sprintf("http://%s:%d/apply-template", host, port)
+	tmplReq, err := http.NewRequestWithContext(ctx, "POST", tmplURL, bytes.NewReader(tmplJSON))
+	if err != nil {
+		return false, nil
+	}
+	tmplReq.Header.Set("Content-Type", "application/json")
+
+	tmplResp, err := client.Do(tmplReq)
+	if err != nil {
+		return false, nil
+	}
+	defer tmplResp.Body.Close()
+
+	if tmplResp.StatusCode != http.StatusOK {
+		return false, nil
+	}
+
+	var tmplResult struct {
+		Prompt string `json:"prompt"`
+	}
+	if err := json.NewDecoder(tmplResp.Body).Decode(&tmplResult); err != nil || tmplResult.Prompt == "" {
+		return false, nil
+	}
+
+	fullPrompt := tmplResult.Prompt + prefillText
+	nPredict := -1
+	if maxPredict > 0 {
+		nPredict = maxPredict
+	}
+
+	compReqBody := map[string]interface{}{
+		"prompt":       fullPrompt,
+		"stream":       true,
+		"temperature":  temperature,
+		"n_predict":    nPredict,
+		"cache_prompt": true,
+	}
+	compJSON, err := json.Marshal(compReqBody)
+	if err != nil {
+		return false, nil
+	}
+
+	compURL := fmt.Sprintf("http://%s:%d/completion", host, port)
+	compReq, err := http.NewRequestWithContext(ctx, "POST", compURL, bytes.NewReader(compJSON))
+	if err != nil {
+		return false, nil
+	}
+	compReq.Header.Set("Content-Type", "application/json")
+
+	compResp, err := client.Do(compReq)
+	if err != nil {
+		if errors.Is(ctx.Err(), context.Canceled) {
+			return true, nil
+		}
+		return false, nil
+	}
+	defer compResp.Body.Close()
+
+	if compResp.StatusCode != http.StatusOK {
+		return false, nil
+	}
+
+	reader := bufio.NewReader(compResp.Body)
+	for {
+		line, readErr := reader.ReadString('\n')
+		if readErr != nil {
+			break
+		}
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, ":") {
+			continue
+		}
+		if trimmed == "data: [DONE]" {
+			break
+		}
+		if strings.HasPrefix(trimmed, "data:") {
+			dataJSON := strings.TrimSpace(strings.TrimPrefix(trimmed, "data:"))
+			if dataJSON == "[DONE]" {
+				break
+			}
+			var compChunk struct {
+				Content string `json:"content"`
+				Stop    bool   `json:"stop"`
+			}
+			if err := json.Unmarshal([]byte(dataJSON), &compChunk); err == nil {
+				if compChunk.Content != "" {
+					emitChunk(ChatStreamChunk{
+						SessionID: sessionID,
+						NodeID:    nodeID,
+						Content:   compChunk.Content,
+					})
+				}
+				if compChunk.Stop {
+					break
+				}
+			}
+		}
+	}
+
+	emitChunk(ChatStreamChunk{
+		SessionID: sessionID,
+		NodeID:    nodeID,
+		Done:      true,
+	})
+	return true, nil
 }
 
 // GetRuntimeLoraAdapters queries llama-server GET /lora-adapters
