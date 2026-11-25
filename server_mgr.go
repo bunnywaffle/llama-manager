@@ -334,6 +334,12 @@ func (sm *ServerManager) AutoDetectAndApplyModelConfig(modelPath string, autoSav
 	if params.EnableJinja {
 		cfg.EnableJinja = true
 	}
+	if params.HasMTP && (cfg.DraftSpecType == "" || cfg.DraftSpecType == "none") {
+		cfg.DraftSpecType = "draft-mtp"
+		if cfg.DraftMaxTokens <= 0 {
+			cfg.DraftMaxTokens = 2
+		}
+	}
 	if params.MMProjPath != "" && cfg.MMProjPath == "" {
 		cfg.MMProjPath = params.MMProjPath
 	}
@@ -605,22 +611,24 @@ func (sm *ServerManager) startProcess(cfg ServerConfig) (chan error, string, err
 		}
 	}
 
-	// Speculative Decoding & MTP Draft Model (-md)
+	// Speculative Decoding & Built-in MTP / External Draft Model (-md)
+	hasDraftModel := false
 	if strings.TrimSpace(cfg.DraftModelPath) != "" {
 		if _, err := os.Stat(cfg.DraftModelPath); err == nil {
+			hasDraftModel = true
 			args = append(args, "-md", cfg.DraftModelPath)
-			if cfg.DraftMaxTokens > 0 {
-				args = append(args, "--spec-draft-n-max", strconv.Itoa(cfg.DraftMaxTokens))
-			}
 			if isCPUOnly {
 				args = append(args, "--spec-draft-ngl", "0", "--spec-draft-device", "none")
 			} else if cfg.DraftGPULayers > 0 {
 				args = append(args, "--spec-draft-ngl", strconv.Itoa(cfg.DraftGPULayers))
 			}
-			if cfg.DraftSpecType != "" && cfg.DraftSpecType != "none" {
-				args = append(args, "--spec-type", cfg.DraftSpecType)
-			}
 		}
+	}
+	if cfg.DraftSpecType != "" && cfg.DraftSpecType != "none" {
+		args = append(args, "--spec-type", cfg.DraftSpecType)
+	}
+	if (hasDraftModel || (cfg.DraftSpecType != "" && cfg.DraftSpecType != "none")) && cfg.DraftMaxTokens > 0 {
+		args = append(args, "--spec-draft-n-max", strconv.Itoa(cfg.DraftMaxTokens))
 	}
 
 	if cfg.Threads > 0 {

@@ -1111,11 +1111,13 @@ function updateLinkedModelsBadge() {
   if (!meta) return;
   const mm = document.querySelector<HTMLInputElement>("#cfg-mmproj")?.value.trim();
   const dm = document.querySelector<HTMLInputElement>("#cfg-draft-model")?.value.trim();
+  const specType = document.querySelector<HTMLSelectElement>("#cfg-draft-type")?.value || "none";
   const loraActiveCount = activeLoraAdapters.filter((l) => l.enabled && l.path.trim()).length;
 
   const parts: string[] = [];
   if (mm) parts.push("Vision");
   if (dm) parts.push("Drafter (MTP)");
+  else if (specType && specType !== "none") parts.push(`Spec (${specType})`);
   if (loraActiveCount > 0) {
     parts.push(loraActiveCount === 1 ? "1 LoRA" : `${loraActiveCount} LoRAs`);
   }
@@ -1343,7 +1345,10 @@ function applyConfigToUI(cfg: ServerConfig) {
   if (draftLayers && cfg.draftGpuLayers !== undefined) draftLayers.value = String(cfg.draftGpuLayers);
 
   const draftType = document.querySelector<HTMLSelectElement>("#cfg-draft-type");
-  if (draftType && cfg.draftSpecType !== undefined) draftType.value = cfg.draftSpecType;
+  if (draftType && cfg.draftSpecType !== undefined) {
+    draftType.value = cfg.draftSpecType;
+    updateLinkedModelsBadge();
+  }
 
   // Reasoning & Thinking Settings
   const rFormat = document.querySelector<HTMLSelectElement>("#cfg-reasoning-format");
@@ -1447,6 +1452,14 @@ async function handleAutoDetectConfig() {
     if (params.reasoningFormat && params.reasoningFormat !== "none") {
       const reasoningSelect = $<HTMLSelectElement>("#cfg-reasoning-format");
       if (reasoningSelect) reasoningSelect.value = params.reasoningFormat;
+    }
+
+    if (params.hasMtp) {
+      const draftType = $<HTMLSelectElement>("#cfg-draft-type");
+      if (draftType) {
+        draftType.value = params.draftSpecType || "draft-mtp";
+      }
+      updateLinkedModelsBadge();
     }
 
     if (params.mmprojPath) {

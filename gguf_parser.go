@@ -29,6 +29,9 @@ type DetectedModelParams struct {
 	HasThinking        bool     `json:"hasThinking"`
 	ReasoningFormat    string   `json:"reasoningFormat"`
 	EnableJinja        bool     `json:"enableJinja"`
+	HasMTP             bool     `json:"hasMtp"`
+	MTPLayers          int      `json:"mtpLayers,omitempty"`
+	DraftSpecType      string   `json:"draftSpecType,omitempty"`
 	MMProjPath         string   `json:"mmprojPath,omitempty"`
 	Summary            string   `json:"summary"`
 }
@@ -234,6 +237,37 @@ func ParseGGUFMetadata(filePath string) (map[string]interface{}, error) {
 		}
 	}
 
+	// Scan tensor names briefly for built-in MTP / NextN heads if not declared in KV metadata
+	hasMTPKV := false
+	for k := range meta {
+		lk := strings.ToLower(k)
+		if strings.HasSuffix(lk, ".nextn_predict_layers") || strings.HasSuffix(lk, ".num_nextn_predict_layers") || strings.HasSuffix(lk, ".mtp_layers") {
+			hasMTPKV = true
+			break
+		}
+	}
+	if !hasMTPKV && tensorCount > 0 && tensorCount <= 20000 {
+		for ti := uint64(0); ti < tensorCount; ti++ {
+			tName, tErr := readGGUFString()
+			if tErr != nil {
+				break
+			}
+			lt := strings.ToLower(tName)
+			if strings.Contains(lt, ".nextn.") || strings.HasPrefix(lt, "nextn.") || strings.Contains(lt, ".mtp.") || strings.HasPrefix(lt, "mtp.") {
+				meta["_has_mtp_tensors"] = true
+				break
+			}
+			var nDims uint32
+			if err := binary.Read(br, binary.LittleEndian, &nDims); err != nil || nDims > 16 {
+				break
+			}
+			// Skip nDims*uint64 + uint32 (type) + uint64 (offset)
+			if err := discardBytes(br, int64(nDims)*8+4+8); err != nil {
+				break
+			}
+		}
+	}
+
 	return meta, nil
 }
 
@@ -387,6 +421,34 @@ func ExtractModelParameters(filePath string) (*DetectedModelParams, error) {
 		params.EnableJinja = true
 	}
 
+	// Auto-detect built-in Multi-Token Prediction (MTP / NextN) heads
+	mtpLayers, _ := getMetaInt(meta,
+		arch+".nextn_predict_layers",
+		arch+".num_nextn_predict_layers",
+		arch+".mtp_layers",
+		"general.nextn_predict_layers",
+	)
+	if mtpLayers <= 0 {
+		for k := range meta {
+			lk := strings.ToLower(k)
+			if strings.HasSuffix(lk, ".nextn_predict_layers") || strings.HasSuffix(lk, ".num_nextn_predict_layers") || strings.HasSuffix(lk, ".mtp_layers") {
+				if v, ok := getMetaInt(meta, k); ok && v > 0 {
+					mtpLayers = v
+					break
+				}
+			}
+		}
+	}
+	if mtpLayers > 0 {
+		params.HasMTP = true
+		params.MTPLayers = mtpLayers
+		params.DraftSpecType = "draft-mtp"
+	} else if hasTensors, ok := meta["_has_mtp_tensors"].(bool); ok && hasTensors {
+		params.HasMTP = true
+		params.MTPLayers = 1
+		params.DraftSpecType = "draft-mtp"
+	}
+
 	// Auto-detect adjacent mmproj if any
 	baseNoExt := strings.TrimSuffix(filepath.Base(filePath), filepath.Ext(filePath))
 	dir := filepath.Dir(filePath)
@@ -418,6 +480,9 @@ func ExtractModelParameters(filePath string) (*DetectedModelParams, error) {
 	}
 	if params.HasThinking {
 		summaryParts = append(summaryParts, "reasoning/thinking enabled")
+	}
+	if params.HasMTP {
+		summaryParts = append(summaryParts, fmt.Sprintf("MTP (%d layer) auto-enabled", params.MTPLayers))
 	}
 	if params.MMProjPath != "" {
 		summaryParts = append(summaryParts, "vision projector linked")

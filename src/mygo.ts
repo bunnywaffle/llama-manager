@@ -70,6 +70,9 @@ export interface DetectedModelParams {
   hasThinking: boolean;
   reasoningFormat: string;
   enableJinja: boolean;
+  hasMtp: boolean;
+  mtpLayers?: number;
+  draftSpecType?: string;
   mmprojPath?: string;
   summary: string;
 }
